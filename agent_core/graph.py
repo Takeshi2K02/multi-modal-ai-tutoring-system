@@ -1,5 +1,6 @@
 import os
-from typing import TypedDict, List, Dict, Any, Optional
+import uuid
+from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
@@ -7,11 +8,17 @@ from langchain_core.output_parsers import JsonOutputParser
 
 from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
-from db.schemas import AgentState
+from agent_core.schemas import AgentState, ThoughtNode, ToTConfig
+
+# Configuration
+CONFIG = ToTConfig(
+    max_depth=2,
+    beam_width=2,
+    branching_factor=3,
+    score_threshold=0.85
+)
 
 # Initialize LLM
-# Note: Using a placeholder API key from the prompt if env var not set.
-# In production, this should always be an env var.
 api_key = os.getenv("GOOGLE_API_KEY", "AIzaSyBu38SUXgGClP4PDZhn2pFRFBsPPB66D9A")
 llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", google_api_key=api_key, temperature=0.7)
 
@@ -19,17 +26,15 @@ llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", google_api_key=api_ke
 
 def retrieve_context(state: AgentState) -> AgentState:
     """
-    Node 1: Fetches student profile from memory and current mock inputs (CV, RL).
+    Node 1: Fetches context and initializes the tree root.
     """
-    print("--- Node: Retrieve Context ---")
+    print("--- Node: Retrieve Context & Init Root ---")
     memory = MemoryManager()
     student_id = state["student_id"]
     
-    # Fetch Profile
     profile = memory.get_student_profile(student_id)
     
-    # Fetch Mocks (simulate real-time sensor data)
-    # We check if 'cv_state' was passed in state for testing, else default
+    # Mocks
     test_cv_state = state.get("context_data", {}).get("test_cv_state", "neutral")
     cv_data = get_mock_cv_inputs(state=test_cv_state)
     rl_strategy = get_mock_rl_strategy()
@@ -39,235 +44,315 @@ def retrieve_context(state: AgentState) -> AgentState:
         "rl_hint": rl_strategy,
         "history": memory.get_recent_history(student_id)
     }
-    
-    return {**state, "profile": profile, "context_data": context_data}
 
-def generate_strategies(state: AgentState) -> AgentState:
-    """
-    Node 2: Generates candidate teaching strategies based on context.
-    """
-    print(f"--- Node: Generate Strategies (Attempt {state.get('retries', 0) + 1}) ---")
+    # Initialize Root Node
+    root_node = ThoughtNode(
+        depth=0,
+        content=f"Root: Goal='{state['user_query']}'",
+        score=1.0,
+        path_score=1.0,
+        metadata={"type": "root"}
+    )
     
+    return {
+        **state,
+        "profile": profile,
+        "context_data": context_data,
+        "frontier": [root_node],
+        "tree_memory": {root_node.id: root_node},
+        "best_node": root_node
+    }
+
+def expand_frontier(state: AgentState) -> AgentState:
+    """
+    Node 2: Expands the current frontier by generating thoughts.
+    Depth 0->1: Strategies
+    Depth 1->2: Substeps/Content
+    """
+    frontier = state["frontier"]
+    if not frontier:
+        return state # Should be caught by stop condition, but safety check
+
+    current_depth = frontier[0].depth
+    next_depth = current_depth + 1
+    
+    print(f"--- Node: Expand Frontier (Depth {current_depth} -> {next_depth}) ---")
+    
+    new_frontier = []
+    tree_memory = state["tree_memory"].copy()
+    
+    for node in frontier:
+        # Generate children for this node
+        children_contents = _generate_children_content(state, node, next_depth)
+        
+        for content in children_contents:
+            child = ThoughtNode(
+                parent_id=node.id,
+                depth=next_depth,
+                content=content["content"],
+                metadata=content.get("metadata", {})
+            )
+            # Add to local tracking
+            new_frontier.append(child)
+            tree_memory[child.id] = child
+            
+    return {**state, "frontier": new_frontier, "tree_memory": tree_memory}
+
+def _generate_children_content(state: AgentState, parent_node: ThoughtNode, target_depth: int) -> List[Dict]:
+    """
+    Helper to generate content based on depth.
+    """
     profile = state["profile"]
     context = state["context_data"]
     query = state["user_query"]
     
-    prompt = PromptTemplate(
-        template="""
-        You are an expert AI tutor.
-        Student Profile: {profile}
-        Real-time Context (Engagement/Emotion): {cv_context}
-        RL System Suggestion: {rl_hint}
-        Student Goal/Query: {query}
-        
-        Generate 3 distinct teaching strategies to address the query.
-        Consider the student's learning style, current engagement level, and the RL suggestion.
-        
-        Output valid JSON with the following structure:
-        {{
-            "strategies": [
-                {{
-                    "label": "Short name of strategy",
-                    "description": "Description of how to apply it",
-                    "content": "Draft of the actual explanation/response"
-                }},
-                ...
-            ]
-        }}
-        """,
-        input_variables=["profile", "cv_context", "rl_hint", "query"]
-    )
+    import time
     
-    chain = prompt | llm | JsonOutputParser()
-    
-    try:
-        result = chain.invoke({
-            "profile": str(profile),
-            "cv_context": str(context["cv"]),
-            "rl_hint": context["rl_hint"],
-            "query": query
-        })
-        strategies = result.get("strategies", [])
-    except Exception as e:
-        print(f"Error generating strategies: {e}")
-        strategies = []
+    max_retries = 3
+    base_delay = 5
 
-    # Store full strategy objects locally, put simple list in state if needed, 
-    # but AgentState defines candiate_strategies as List[str]. 
-    # Let's adjust to store the dicts in a temp way or just serialized strings.
-    # For simplicity, we'll store the list of dicts in 'candidate_strategies' (AgentState definition allows loose typing at runtime or we update schema).
-    # The schema said List[str], let's try to stick to that or update schema. 
-    # Validating schema: candidate_strategies: List[str]. 
-    # Let's serialize them for now to be safe, or just store labels.
-    # Actually, we need the content for the final output. 
-    # I will store them as a list of dicts. Python TypedDict doesn't enforce runtime checks so it's fine.
-    
-    return {**state, "candidate_strategies": strategies}
+    if target_depth == 1:
+        # Generate Strategies
+        prompt = PromptTemplate(
+            template="""
+            Student: {profile}
+            Context: {cv}
+            RL Suggestion: {rl}
+            Goal: {query}
+            
+            Generate {k} distinct high-level teaching strategies.
+            Return JSON: {{ "options": [ {{ "label": "Strategy Name", "approach": "Brief description" }}, ... ] }}
+            """,
+            input_variables=["profile", "cv", "rl", "query", "k"]
+        )
+        
+        for attempt in range(max_retries):
+            try:
+                chain = prompt | llm | JsonOutputParser()
+                res = chain.invoke({
+                    "profile": str(profile), "cv": str(context["cv"]), "rl": context["rl_hint"],
+                    "query": query, "k": CONFIG.branching_factor
+                })
+                return [{"content": opt["label"], "metadata": {"approach": opt["approach"], "type": "strategy"}} for opt in res.get("options", [])]
+            except Exception as e:
+                print(f"Gen D1 Attempt {attempt+1} Failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(base_delay * (attempt + 1))
+        return []
 
-def evaluate_strategies(state: AgentState) -> AgentState:
-    """
-    Node 3: Scores the generated strategies.
-    """
-    print("--- Node: Evaluate Strategies ---")
-    strategies = state["candidate_strategies"]
-    profile = state["profile"]
-    context = state["context_data"]
-    
-    if not strategies:
-        return {**state, "strategy_scores": {}}
+    elif target_depth == 2:
+        # Generate Substeps / Content for the Strategy
+        prompt = PromptTemplate(
+            template="""
+            Student: {profile}
+            Context: {cv}
+            Chosen Strategy: {strategy} (Approach: {approach})
+            Goal: {query}
+            
+            Generate the actual tutoring response/step-by-step explanation using this strategy.
+            Return JSON: {{ "options": [ {{ "text": "Full explanation text...", "focus": "Key focus area" }} ] }}
+            (Generate {k} variations)
+            """,
+            input_variables=["profile", "cv", "strategy", "approach", "query", "k"]
+        )
+        for attempt in range(max_retries):
+            try:
+                chain = prompt | llm | JsonOutputParser()
+                parent_approach = parent_node.metadata.get("approach", "")
+                res = chain.invoke({
+                    "profile": str(profile), "cv": str(context["cv"]), 
+                    "strategy": parent_node.content, "approach": parent_approach,
+                    "query": query, "k": CONFIG.branching_factor
+                })
+                return [{"content": opt["text"], "metadata": {"focus": opt["focus"], "type": "response"}} for opt in res.get("options", [])]
+            except Exception as e:
+                 print(f"Gen D2 Attempt {attempt+1} Failed: {e}")
+                 if attempt < max_retries - 1:
+                    time.sleep(base_delay * (attempt + 1))
+        return []
+             
+    return []
 
-    prompt = PromptTemplate(
-        template="""
-        Evaluate these teaching strategies for student: {profile}
-        Context: {cv_context}
-        
-        Strategies: {strategies}
-        
-        Score each strategy from 0.0 to 1.0 based on:
-        1. Relevance to learning style
-        2. Appropriateness for engagement level (e.g. if bored, needs high interactivity)
-        3. Clarity and correctness
-        
-        Output valid JSON:
-        {{
-            "scores": {{
-                "strategy_label_1": 0.8,
-                "strategy_label_2": 0.5,
-                ...
-            }}
-        }}
-        """,
-        input_variables=["profile", "cv_context", "strategies"]
-    )
-    
-    chain = prompt | llm | JsonOutputParser()
-    
-    try:
-        result = chain.invoke({
-            "profile": str(profile),
-            "cv_context": str(context["cv"]),
-            "strategies": str(strategies)
-        })
-        scores = result.get("scores", {})
-    except Exception as e:
-        print(f"Error evaluating strategies: {e}")
-        scores = {}
-        
-    return {**state, "strategy_scores": scores}
-
-def select_strategy_node(state: AgentState) -> AgentState:
+def evaluate_frontier(state: AgentState) -> AgentState:
     """
-    Node 4 (Logic): Selects the best strategy based on scores.
-    Sets 'selected_strategy_label' and 'final_response'.
+    Node 3: Scores the new nodes in the frontier.
+    Calculates Path Score.
     """
-    print("--- Node: Selection Logic ---")
-    scores = state["strategy_scores"]
-    strategies = state["candidate_strategies"]
+    print("--- Node: Evaluate Frontier ---")
+    frontier = state["frontier"]
+    tree_memory = state["tree_memory"]
     
-    if not scores or not strategies:
+    if not frontier:
         return state
 
-    best_label = max(scores, key=scores.get)
-    best_score = scores[best_label]
+    # Batch evaluate or loop (loop implies more LLM calls, batch is better)
+    # For simplicity in this POC, we'll evaluate in one prompt if possible, or loop.
+    # Evaluating a list of thoughts is easier.
     
-    # Find the full strategy object
-    selected_strat = next((s for s in strategies if s["label"] == best_label), None)
+    # We need to construct a robust prompt that sees the item + parent context
+    # Scoring: 0.0 to 1.0. 
+    # Path Score = Average(Node Score, Parent Path Score) OR Product.
+    # Let's use Simple Average for stability in POC: (ParentPathScore + LocalScore) / 2
     
-    if selected_strat:
-        return {
-            **state,
-            "selected_strategy_label": best_label,
-            "final_response": selected_strat["content"],
-            "reasoning_trace": [f"Selected {best_label} with score {best_score}"]
-        }
+    scored_frontier = []
     
-    return state
-
-def format_output(state: AgentState) -> AgentState:
-    """
-    Node 5: Final formatting.
-    """
-    print("--- Node: Final Output ---")
-    # You could do post-processing here.
-    # For now, we just pass through, maybe log to DB.
-    
-    memory = MemoryManager()
-    memory.save_interaction({
-        "student_id": state["student_id"],
-        "goal_id": "goal_1", # placeholder
-        "chosen_strategy": state["selected_strategy_label"],
-        "scores": state["strategy_scores"],
-        "cv_state": state["context_data"]["cv"]["emotion"],
-        "rl_hint": state["context_data"]["rl_hint"],
-        "response_text": state["final_response"]
-    })
-    
-    return state
-
-# --- Conditional Logic ---
-
-def check_score_threshold(state: AgentState) -> str:
-    """
-    Determines if we should loop back or proceed.
-    Threshold = 0.8
-    Max Retries = 3 (default 0 start, so 0,1,2 = 3 attempts)
-    """
-    if not scores:
-        if retries < 2:
-            return "retry"
-        return "finalize" # Give up after max retries
+    for node in frontier:
+        local_score = _score_node_content(state, node, tree_memory)
+        parent = tree_memory.get(node.parent_id)
+        parent_path_score = parent.path_score if parent else 1.0
         
-    best_score = max(scores.values())
-    retries = state.get("retries", 0)
+        # Path accumulation logic: decay slightly to penalize depth, or avg.
+        # Let's do Average to keep it balanced.
+        if node.depth == 1:
+            path_score = local_score # Strategy selection is critical
+        else:
+            path_score = (parent_path_score + local_score) / 2
+            
+        node.score = local_score
+        node.path_score = path_score
+        scored_frontier.append(node)
+        
+    # Update Best Node
+    current_best = state["best_node"]
+    frontier_best = max(scored_frontier, key=lambda x: x.path_score) if scored_frontier else None
     
-    print(f"--- Check: Best score {best_score}, Retries {retries} ---")
+    if frontier_best and (not current_best or frontier_best.path_score > current_best.path_score):
+        current_best = frontier_best
+
+    return {**state, "frontier": scored_frontier, "best_node": current_best}
+
+def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
+    # Use LLM to score relevance
+    prompt = PromptTemplate(
+        template="""
+        Goal: {query}
+        Context: {cv}
+        Student Profile: {profile}
+        
+        Item to Evaluate (Depth {depth}): "{content}"
+        Metadata: {metadata}
+        
+        Score this item (0.0 to 1.0) on: 
+        1. Alignment with Goal
+        2. Suitability for Student State (e.g. if bored -> interactive?)
+        3. Quality of content
+        
+        Return JSON: {{ "score": 0.8 }}
+        """,
+        input_variables=["query", "cv", "profile", "depth", "content", "metadata"]
+    )
+    chain = prompt | llm | JsonOutputParser()
+    try:
+        res = chain.invoke({
+            "query": state["user_query"],
+            "cv": str(state["context_data"]["cv"]),
+            "profile": str(state["profile"]),
+            "depth": node.depth,
+            "content": node.content,
+            "metadata": str(node.metadata)
+        })
+        return float(res.get("score", 0.5))
+    except:
+        return 0.5
+
+def prune_frontier(state: AgentState) -> AgentState:
+    """
+    Node 4: Selects the top K (Beam Width) nodes for the next iteration.
+    """
+    print(f"--- Node: Prune Frontier (Width {CONFIG.beam_width}) ---")
+    frontier = state["frontier"]
+    if not frontier:
+        return state
+        
+    # Sort by PATH score desc
+    sorted_frontier = sorted(frontier, key=lambda x: x.path_score, reverse=True)
+    beam = sorted_frontier[:CONFIG.beam_width]
     
-    if best_score >= 0.8:
+    return {**state, "frontier": beam}
+
+def check_stop_condition(state: AgentState) -> str:
+    """
+    Conditional Logic: Continue or Stop?
+    """
+    frontier = state["frontier"]
+    best_node = state["best_node"]
+    
+    print(f"--- Check Stop: Depth {frontier[0].depth if frontier else '?'}, Best Score {best_node.path_score if best_node else 0} ---")
+    
+    if not frontier:
+        return "finalize" # Dead end, return best so far
+        
+    current_depth = frontier[0].depth
+    
+    # 1. Max Depth
+    if current_depth >= CONFIG.max_depth:
         return "finalize"
-    
-    if retries < 2: # Allow 2 retries (3 total attempts)
-        return "retry"
         
-    return "finalize" # Max retries reached, accept best so far
+    # 2. Score Threshold (Early Exit)
+    # Only if we are at least depth 1 (have a strategy)
+    if best_node and best_node.path_score >= CONFIG.score_threshold and current_depth == CONFIG.max_depth:
+         return "finalize"
+         
+    return "expand"
 
-def retry_logic(state: AgentState) -> AgentState:
+def finalize_output(state: AgentState) -> AgentState:
     """
-    Updates retry count.
+    Node 5: Reconstructs path and output.
     """
-    return {**state, "retries": state.get("retries", 0) + 1}
+    print("--- Node: Finalize Output ---")
+    best_node = state["best_node"]
+    tree_memory = state["tree_memory"]
+    
+    path = []
+    curr = best_node
+    while curr:
+        path.append(curr)
+        if curr.parent_id:
+            curr = tree_memory.get(curr.parent_id)
+        else:
+            curr = None
+    path.reverse() # Root -> Leaf
+    
+    # Construct reasoning trace
+    trace = [f"[{n.depth}] {n.content} (Score: {n.path_score:.2f})" for n in path]
+    
+    # Final response is the content of the leaf
+    final_resp = best_node.content if best_node else "No suitable strategy found."
+    strategy_label = path[1].content if len(path) > 1 else "Unknown"
+    
+    return {
+        **state,
+        "final_response": final_resp,
+        "reasoning_trace": trace,
+        "selected_strategy_label": strategy_label # Ad-hoc addition for verification
+    }
 
-# --- Graph Definition ---
+# --- Graph ---
 
-def create_agent_graph():
+def create_tot_graph():
     workflow = StateGraph(AgentState)
     
-    # Add Nodes
     workflow.add_node("retrieve_context", retrieve_context)
-    workflow.add_node("generate_strategies", generate_strategies)
-    workflow.add_node("evaluate_strategies", evaluate_strategies)
-    workflow.add_node("select_strategy_node", select_strategy_node) # Part of decision process
-    workflow.add_node("retry_node", retry_logic)
-    workflow.add_node("format_output", format_output)
+    workflow.add_node("expand_frontier", expand_frontier)
+    workflow.add_node("evaluate_frontier", evaluate_frontier)
+    workflow.add_node("prune_frontier", prune_frontier)
+    workflow.add_node("finalize_output", finalize_output)
     
-    # Set Entry Point
     workflow.set_entry_point("retrieve_context")
     
-    # Add Edges
-    workflow.add_edge("retrieve_context", "generate_strategies")
-    workflow.add_edge("generate_strategies", "evaluate_strategies")
-    workflow.add_edge("evaluate_strategies", "select_strategy_node")
+    workflow.add_edge("retrieve_context", "expand_frontier")
+    workflow.add_edge("expand_frontier", "evaluate_frontier")
+    workflow.add_edge("evaluate_frontier", "prune_frontier")
     
-    # Conditional Edge
     workflow.add_conditional_edges(
-        "select_strategy_node",
-        check_score_threshold,
+        "prune_frontier",
+        check_stop_condition,
         {
-            "finalize": "format_output",
-            "retry": "retry_node"
+            "expand": "expand_frontier",
+            "finalize": "finalize_output"
         }
     )
     
-    workflow.add_edge("retry_node", "generate_strategies")
-    workflow.add_edge("format_output", END)
+    workflow.add_edge("finalize_output", END)
     
     return workflow.compile()
