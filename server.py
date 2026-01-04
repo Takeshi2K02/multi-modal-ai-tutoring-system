@@ -63,6 +63,7 @@ def transform_state_to_graph(state: AgentState) -> GraphResponse:
                 "pathScore": node.path_score,
                 "depth": node.depth,
                 "type": node.metadata.get("type", "unknown"),
+                "directive": node.metadata.get("directive"), # Pass full directive to UI
                 "isBestPath": node_id in best_path_ids
             },
             "type": "thoughtNode", # Custom type for React Flow
@@ -95,7 +96,8 @@ def transform_state_to_graph(state: AgentState) -> GraphResponse:
             "run_stats": {
                 "total_nodes": len(tree_memory),
                 "depth": state.get("frontier", [ThoughtNode(content="", depth=0)])[0].depth if state.get("frontier") else 0
-            }
+            },
+            "context_data": state.get("context_data", {}) # Expose CV/RL signals to UI
         }
     )
 

@@ -34,6 +34,21 @@ const ThoughtNode = ({ data, isConnectable }) => {
         </div>
     ) : null;
 
+    // Directive Badges (if this is a structured output node)
+    const directive = data.directive;
+    const DirectiveInfo = directive ? (
+        <div className="mb-2 flex flex-wrap gap-1">
+            <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 text-[9px] font-bold uppercase border border-indigo-200">
+                {directive.type}
+            </span>
+            {directive.parameters?.tone && (
+                <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-semibold border border-slate-200">
+                    {directive.parameters.tone}
+                </span>
+            )}
+        </div>
+    ) : null;
+
     return (
         <div className={wrapperClasses}>
             {SelectionBadge}
@@ -54,9 +69,12 @@ const ThoughtNode = ({ data, isConnectable }) => {
             <div className="p-4 bg-white relative">
                 {/* Subtle highlight background for best path */}
                 {isBestPath && <div className="absolute inset-0 bg-emerald-50/30 pointer-events-none" />}
-                <p className="text-sm font-medium text-slate-700 leading-snug relative z-10">
-                    {label}
-                </p>
+                <div className="relative z-10">
+                    {DirectiveInfo}
+                    <p className="text-sm font-medium text-slate-700 leading-snug">
+                        {label}
+                    </p>
+                </div>
             </div>
 
             {/* Footer */}

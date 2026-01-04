@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import ScenarioControls from './components/Sidebar/ScenarioControls';
 import TreeVisualizer from './components/Graph/TreeVisualizer';
+import SignalsPanel from './components/Graph/SignalsPanel';
 import { runSimulation } from './services/api';
 
 function App() {
@@ -46,6 +47,9 @@ function App() {
 
         {/* Graph Canvas */}
         <TreeVisualizer data={graphData} />
+
+        {/* Context / Signals Panel (Top Right) */}
+        <SignalsPanel data={graphData?.meta?.context_data} />
 
         {/* Error Toast */}
         {error && (

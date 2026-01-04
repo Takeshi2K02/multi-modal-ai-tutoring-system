@@ -2,6 +2,17 @@ from typing import List, Dict, Optional, TypedDict, Any
 from pydantic import BaseModel, Field
 import uuid
 
+
+# RL Policy -> Allowed Execution Strategies Mapping
+RL_ACTION_MAP = {
+    0: {"name": "Simplify content", "allowed": ["step_by_step", "reduce_cognitive_load", "recap"]},
+    1: {"name": "Add interactive example", "allowed": ["guided_practice", "mini_exercise", "gamified_prompt"]},
+    2: {"name": "Provide hint", "allowed": ["socratic_hint", "visual_hint", "worked_example_hint"]},
+    3: {"name": "Increase difficulty", "allowed": ["challenge_problem", "extension_task"]},
+    4: {"name": "Revise topic", "allowed": ["concept_reframing", "prerequisite_review"]},
+    5: {"name": "Encourage student", "allowed": ["motivational_feedback", "confidence_boost"]}
+}
+
 class ThoughtNode(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     parent_id: Optional[str] = None

@@ -3,8 +3,9 @@ import uuid
 from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 import json
+import re
 
 from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
@@ -23,6 +24,29 @@ CONFIG = ToTConfig(
 # Initialize LLM
 llm = get_llm()
 
+# Helper for robust parsing
+def extract_json_from_text(text: str) -> Dict:
+    """
+    Extracts the first valid JSON object from a string, handling markdown blocks
+    and conversational preambles/postscripts common in local LLMs.
+    """
+    try:
+        # First, try to find a JSON block between backticks
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+            
+        # If no code block, try to find the first { and the last }
+        # This catches "Here is the JSON: { ... } Hope that helps!"
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+            
+        # Final fallback: try raw
+        return json.loads(text)
+    except Exception as e:
+        raise ValueError(f"Failed to extract JSON from text: {text[:100]}... Error: {e}")
+
 # --- Nodes ---
 
 def retrieve_context(state: AgentState) -> AgentState:
@@ -39,6 +63,12 @@ def retrieve_context(state: AgentState) -> AgentState:
     test_cv_state = state.get("context_data", {}).get("test_cv_state", "neutral")
     cv_data = get_mock_cv_inputs(state=test_cv_state)
     rl_strategy = get_mock_rl_strategy() # Returns Dict with action_id, reasoning, etc.
+    
+    # ENRICHMENT: Map action_id to human-readable name for UI transparency
+    from agent_core.schemas import RL_ACTION_MAP
+    action_id = rl_strategy.get("action_id", 2)
+    current_policy = RL_ACTION_MAP.get(action_id, {"name": "Unknown Policy"})
+    rl_strategy["policy_name"] = current_policy["name"]
     
     context_data = {
         "cv": cv_data,
@@ -114,44 +144,76 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
 
     if target_depth == 1:
         # Generate Strategies
+        # ENFORCE RL POLICY: Get action_id and look up allowed strategies
+        rl_data = context.get("rl_hint", {})
+        # Handle both dict and string representation if necessary (mocks return dict)
+        action_id = rl_data.get("action_id", 2) # Default to Hint (2) if missing
+        
+        from agent_core.schemas import RL_ACTION_MAP
+        policy = RL_ACTION_MAP.get(action_id, RL_ACTION_MAP[2])
+        allowed_strategies = ", ".join(policy["allowed"])
+        policy_name = policy["name"]
+
         prompt = PromptTemplate(
             template="""
-            Role: You are a strict JSON data generator. You do not speak or explain.
+            Role: You are a strict JSON data generator.
             
             Student: {profile}
             
             REAL-TIME SIGNALS:
             CV Data: {cv}
-            RL Policy: {rl}
+            
+            RL POLICY INSTRUCTION (MANDATORY):
+            - Policy Action: "{policy_name}" (ID: {action_id})
+            - ALLOWED STRATEGIES: [{allowed_strategies}]
             
             Goal: {query}
             
-            TASK: Generate {k} teaching strategies based on signals.
+            TASK: Generate {k} distinct execution strategies that strictly align with the ALLOWED STRATEGIES list.
             
             OUTPUT RULES:
             1. Return ONLY valid JSON.
-            2. NO introductory text (e.g. "Here returns...").
-            3. NO markdown blocks (```json).
-            4. Start output immediately with {{.
+            2. The "label" MUST be one of the Allowed Strategies (or a very close variation).
+            3. "approach" should explain how you will apply it.
             
             JSON FORMAT:
-            {{ "options": [ {{ "label": "Strategy Name", "approach": "Description" }}, ... ] }}
+            {{ "options": [ {{ "label": "Strategy Name (from allowed)", "approach": "Description" }}, ... ] }}
             """,
-            input_variables=["profile", "cv", "rl", "query", "k"]
+            input_variables=["profile", "cv", "policy_name", "action_id", "allowed_strategies", "query", "k"]
         )
         
         for attempt in range(max_retries):
             try:
-                chain = prompt | llm | JsonOutputParser()
-                res = chain.invoke({
+                # Use StrOutputParser + Custom Extraction for robustness against "Chatty" LLMs
+                chain = prompt | llm | StrOutputParser()
+                raw_res = chain.invoke({
                     "profile": str(profile), 
                     "cv": json.dumps(context["cv"], ensure_ascii=False), 
-                    "rl": json.dumps(context["rl_hint"], ensure_ascii=False),
+                    "policy_name": policy_name,
+                    "action_id": action_id,
+                    "allowed_strategies": allowed_strategies,
                     "query": query, "k": CONFIG.branching_factor
                 })
+                
+                res = extract_json_from_text(raw_res)
+
                 # ROBUST PARSING: Handle if LLM returns a List directly instead of {"options": [...]}
                 options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                return [{"content": opt["label"], "metadata": {"approach": opt.get("approach", ""), "type": "strategy"}} for opt in options]
+                
+                # Tag nodes with policy info for tracing
+                results = []
+                for opt in options:
+                    results.append({
+                        "content": opt["label"], 
+                        "metadata": {
+                            "approach": opt.get("approach", ""), 
+                            "type": "strategy",
+                            "policy_id": action_id,
+                            "policy_name": policy_name
+                        }
+                    })
+                return results
+
             except Exception as e:
                 print(f"Gen D1 Attempt {attempt+1} Failed: {e}")
                 if attempt < max_retries - 1:
@@ -172,31 +234,64 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
             Strategy: {strategy} ({approach})
             Goal: {query}
             
-            TASK: Generate {k} variations of explanation.
+            TASK: Generate {k} variations of specific content directives.
             
             OUTPUT RULES:
             1. Return ONLY valid JSON.
-            2. NO introductory text.
-            3. Start output immediately with {{.
+            2. Start output immediately with {{.
             
             JSON FORMAT: 
-            {{ "options": [ {{ "text": "Explanation content...", "focus": "Main focus" }}, ... ] }}
+            {{
+                "options": [
+                    {{
+                        "directive": {{
+                            "type": "explanation | quiz | summary",
+                            "format": "text",
+                            "parameters": {{ "tone": "encouraging", "complexity": "low" }},
+                            "content": "The actual full text of the explanation..."
+                        }},
+                        "focus": "Main focus/theme of this variation"
+                    }}
+                ]
+            }}
             """,
             input_variables=["profile", "cv", "strategy", "approach", "query", "k"]
         )
         for attempt in range(max_retries):
             try:
-                chain = prompt | llm | JsonOutputParser()
+                chain = prompt | llm | StrOutputParser()
                 parent_approach = parent_node.metadata.get("approach", "")
-                res = chain.invoke({
+                raw_res = chain.invoke({
                     "profile": str(profile), 
                     "cv": json.dumps(context["cv"], ensure_ascii=False), 
                     "strategy": parent_node.content, "approach": parent_approach,
                     "query": query, "k": CONFIG.branching_factor
                 })
+                
+                res = extract_json_from_text(raw_res)
+                
                 # ROBUST PARSING: Handle if LLM returns a List directly instead of {"options": [...]}
                 options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                return [{"content": opt["text"], "metadata": {"focus": opt.get("focus", ""), "type": "response"}} for opt in options]
+                
+                # Transform into ThoughtNodes
+                # We store the "content" text in node.content (for UI visibility)
+                # We store the full "directive" object in node.metadata (for Content Generator)
+                children = []
+                for opt in options:
+                    directive = opt.get("directive", {})
+                    # Fallback if LLM messes up structure but gives text
+                    content_text = directive.get("content", opt.get("text", "No content provided"))
+                    
+                    children.append({
+                        "content": content_text,
+                        "metadata": {
+                            "focus": opt.get("focus", ""),
+                            "type": "response",
+                            "directive": directive # The full structured output
+                        }
+                    })
+                return children
+
             except Exception as e:
                  print(f"Gen D2 Attempt {attempt+1} Failed: {e}")
                  if attempt < max_retries - 1:
@@ -283,9 +378,9 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
         """,
         input_variables=["query", "cv", "profile", "depth", "content", "metadata"]
     )
-    chain = prompt | llm | JsonOutputParser()
+    chain = prompt | llm | StrOutputParser()
     try:
-        res = chain.invoke({
+        raw_res = chain.invoke({
             "query": state["user_query"],
             "cv": json.dumps(state["context_data"]["cv"], ensure_ascii=False),
             "profile": str(state["profile"]),
@@ -293,7 +388,10 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
             "content": node.content,
             "metadata": str(node.metadata)
         })
+        
         # Robust extraction
+        res = extract_json_from_text(raw_res)
+        
         score = res.get("score")
         if score is None:
             print(f"Scoring Warning: No 'score' key in {res}")
@@ -368,11 +466,21 @@ def finalize_output(state: AgentState) -> AgentState:
     final_resp = best_node.content if best_node else "No suitable strategy found."
     strategy_label = path[1].content if len(path) > 1 else "Unknown"
     
+    # Extract Policy Info from Strategy Node (Depth 1)
+    policy_id = "N/A"
+    policy_name = "N/A"
+    if len(path) > 1:
+        strategy_node = path[1]
+        policy_id = strategy_node.metadata.get("policy_id", "N/A")
+        policy_name = strategy_node.metadata.get("policy_name", "N/A")
+
     return {
         **state,
         "final_response": final_resp,
         "reasoning_trace": trace,
-        "selected_strategy_label": strategy_label # Ad-hoc addition for verification
+        "selected_strategy_label": strategy_label,
+        "policy_action_id": policy_id,
+        "policy_action_name": policy_name
     }
 
 # --- Graph ---
