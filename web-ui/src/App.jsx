@@ -2,9 +2,14 @@ import React, { useState } from 'react';
 import ScenarioControls from './components/Sidebar/ScenarioControls';
 import TreeVisualizer from './components/Graph/TreeVisualizer';
 import SignalsPanel from './components/Graph/SignalsPanel';
+import GoalDecomposition from './pages/GoalDecomposition';
+import TOC from './pages/TableOfContents';
 import { runSimulation } from './services/api';
 
 function App() {
+  const [view, setView] = useState('visualizer'); // 'visualizer' | 'decomposition' | 'toc'
+  const [decompositionResult, setDecompositionResult] = useState(null); // Store data for TOC
+
   const [graphData, setGraphData] = useState(null);
   const [outcome, setOutcome] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -32,6 +37,25 @@ function App() {
     }
   };
 
+  // Route: Table of Contents (TOC)
+  if (view === 'toc' && decompositionResult) {
+    return <TOC data={decompositionResult} onBack={() => setView('decomposition')} />;
+  }
+
+  // Route: Goal Decomposition
+  if (view === 'decomposition') {
+    return (
+      <GoalDecomposition
+        onBack={() => setView('visualizer')}
+        onStart={(data) => {
+          setDecompositionResult(data);
+          setView('toc');
+        }}
+      />
+    );
+  }
+
+  // Route: Main Visualizer
   return (
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans text-slate-900">
 
@@ -41,6 +65,14 @@ function App() {
         isRunning={loading}
         outcome={outcome}
       />
+
+      {/* Absolute Nav Button for Decomposition Demo */}
+      <button
+        onClick={() => setView('decomposition')}
+        className="absolute top-6 left-[380px] z-50 px-4 py-2 bg-white border border-slate-300 shadow-sm rounded-lg text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+      >
+        To Goal Decomposition →
+      </button>
 
       {/* Main Graph Area */}
       <div className="flex-1 relative h-full dots-pattern">

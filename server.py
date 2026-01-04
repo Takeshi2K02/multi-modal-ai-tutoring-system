@@ -7,6 +7,7 @@ import os
 
 from agent_core.graph import create_tot_graph
 from agent_core.schemas import AgentState, ThoughtNode
+from services.decomposition_service import decompose_goal
 
 app = FastAPI()
 
@@ -21,6 +22,9 @@ app.add_middleware(
 
 class ScenarioRequest(BaseModel):
     scenario: str # "confused" | "bored"
+
+class DecomposeRequest(BaseModel):
+    goal: str
 
 class GraphResponse(BaseModel):
     nodes: List[Dict[str, Any]]
@@ -130,6 +134,16 @@ async def run_simulation(req: ScenarioRequest):
         return transform_state_to_graph(final_state)
     except Exception as e:
         print(f"Agent Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/goal_decompose")
+async def goal_decompose(req: DecomposeRequest):
+    print(f"Decomposing goal: {req.goal}")
+    try:
+        result = decompose_goal(req.goal)
+        return result
+    except Exception as e:
+        print(f"Decomposition Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
