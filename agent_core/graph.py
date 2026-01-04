@@ -149,7 +149,9 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                     "rl": json.dumps(context["rl_hint"], ensure_ascii=False),
                     "query": query, "k": CONFIG.branching_factor
                 })
-                return [{"content": opt["label"], "metadata": {"approach": opt["approach"], "type": "strategy"}} for opt in res.get("options", [])]
+                # ROBUST PARSING: Handle if LLM returns a List directly instead of {"options": [...]}
+                options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                return [{"content": opt["label"], "metadata": {"approach": opt.get("approach", ""), "type": "strategy"}} for opt in options]
             except Exception as e:
                 print(f"Gen D1 Attempt {attempt+1} Failed: {e}")
                 if attempt < max_retries - 1:
@@ -192,7 +194,9 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                     "strategy": parent_node.content, "approach": parent_approach,
                     "query": query, "k": CONFIG.branching_factor
                 })
-                return [{"content": opt["text"], "metadata": {"focus": opt["focus"], "type": "response"}} for opt in res.get("options", [])]
+                # ROBUST PARSING: Handle if LLM returns a List directly instead of {"options": [...]}
+                options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                return [{"content": opt["text"], "metadata": {"focus": opt.get("focus", ""), "type": "response"}} for opt in options]
             except Exception as e:
                  print(f"Gen D2 Attempt {attempt+1} Failed: {e}")
                  if attempt < max_retries - 1:
@@ -243,10 +247,12 @@ def evaluate_frontier(state: AgentState) -> AgentState:
         scored_frontier.append(node)
         
     # Update Best Node
+    # Logic Update: Always update to the best of the CURRENT frontier (deeper) 
+    # so we track the path to the leaf, even if score decays from 1.0 (Root).
     current_best = state["best_node"]
     frontier_best = max(scored_frontier, key=lambda x: x.path_score) if scored_frontier else None
     
-    if frontier_best and (not current_best or frontier_best.path_score > current_best.path_score):
+    if frontier_best:
         current_best = frontier_best
 
     return {**state, "frontier": scored_frontier, "best_node": current_best}
