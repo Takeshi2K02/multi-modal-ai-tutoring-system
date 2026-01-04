@@ -2,13 +2,13 @@ import os
 import uuid
 from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
 from agent_core.schemas import AgentState, ThoughtNode, ToTConfig
+from agent_core.llm import get_llm
 
 # Configuration
 CONFIG = ToTConfig(
@@ -19,8 +19,8 @@ CONFIG = ToTConfig(
 )
 
 # Initialize LLM
-api_key = os.getenv("GOOGLE_API_KEY", "AIzaSyBu38SUXgGClP4PDZhn2pFRFBsPPB66D9A")
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", google_api_key=api_key, temperature=0.7)
+# Initialize LLM
+llm = get_llm()
 
 # --- Nodes ---
 
@@ -138,7 +138,10 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                 print(f"Gen D1 Attempt {attempt+1} Failed: {e}")
                 if attempt < max_retries - 1:
                     time.sleep(base_delay * (attempt + 1))
-        return []
+                else:
+                    raise e
+
+
 
     elif target_depth == 2:
         # Generate Substeps / Content for the Strategy
@@ -169,7 +172,9 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                  print(f"Gen D2 Attempt {attempt+1} Failed: {e}")
                  if attempt < max_retries - 1:
                     time.sleep(base_delay * (attempt + 1))
-        return []
+                 else:
+                    raise e
+
              
     return []
 
