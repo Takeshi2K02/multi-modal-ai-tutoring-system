@@ -11,6 +11,8 @@ from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
 from agent_core.schemas import AgentState, ThoughtNode, ToTConfig
 from agent_core.llm import get_llm
+from agent_core.strategy_taxonomy import StrategyType
+from agent_core.optimization import compute_outcome
 
 # Configuration
 CONFIG = ToTConfig(
@@ -154,6 +156,8 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
         allowed_strategies = ", ".join(policy["allowed"])
         policy_name = policy["name"]
 
+        valid_strategies = [st.value for st in StrategyType]
+        
         prompt = PromptTemplate(
             template="""
             Role: You are a strict JSON data generator.
@@ -171,15 +175,19 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
             
             TASK: Generate {k} distinct execution strategies that strictly align with the ALLOWED STRATEGIES list.
             
+            CRITICAL: You MUST use one of these fixed 'strategy_type' IDs:
+            {valid_strategies}
+            
             OUTPUT RULES:
             1. Return ONLY valid JSON.
             2. The "label" MUST be one of the Allowed Strategies (or a very close variation).
-            3. "approach" should explain how you will apply it.
+            3. "strategy_type" MUST be one of the valid IDs.
+            4. "approach" should explain how you will apply it.
             
             JSON FORMAT:
-            {{ "options": [ {{ "label": "Strategy Name (from allowed)", "approach": "Description" }}, ... ] }}
+            {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "Description" }}, ... ] }}
             """,
-            input_variables=["profile", "cv", "policy_name", "action_id", "allowed_strategies", "query", "k"]
+            input_variables=["profile", "cv", "policy_name", "action_id", "allowed_strategies", "query", "k", "valid_strategies"]
         )
         
         for attempt in range(max_retries):
@@ -192,7 +200,8 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                     "policy_name": policy_name,
                     "action_id": action_id,
                     "allowed_strategies": allowed_strategies,
-                    "query": query, "k": CONFIG.branching_factor
+                    "query": query, "k": CONFIG.branching_factor,
+                    "valid_strategies": ", ".join(valid_strategies)
                 })
                 
                 res = extract_json_from_text(raw_res)
@@ -207,6 +216,7 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                         "content": opt["label"], 
                         "metadata": {
                             "approach": opt.get("approach", ""), 
+                            "strategy_type": opt.get("strategy_type", "visual_explanation"),
                             "type": "strategy",
                             "policy_id": action_id,
                             "policy_name": policy_name
@@ -355,6 +365,9 @@ def evaluate_frontier(state: AgentState) -> AgentState:
 def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
     # Use LLM to score relevance
     # Use LLM to score relevance
+    # Create Prompt with Taxonomy
+    valid_strategies = [st.value for st in StrategyType]
+    
     prompt = PromptTemplate(
         template="""
         Role: You are a strict scoring engine.
@@ -379,6 +392,7 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
         input_variables=["query", "cv", "profile", "depth", "content", "metadata"]
     )
     chain = prompt | llm | StrOutputParser()
+    
     try:
         raw_res = chain.invoke({
             "query": state["user_query"],
@@ -410,11 +424,72 @@ def prune_frontier(state: AgentState) -> AgentState:
     if not frontier:
         return state
         
-    # Sort by PATH score desc
+    # Tie-Breaking Logic
+    # 1. Identify Tie: Check if top N candidates have similar scores
+    # 2. Resolve: Use Student Learning Preferences (Confidence)
+    
     sorted_frontier = sorted(frontier, key=lambda x: x.path_score, reverse=True)
+    
+    # Enrich frontier with Preference Confidence for sorting
+    profile = state["profile"]
+    preferences = profile.get("learning_preferences", {})
+    
+    def get_preference_score(node):
+        # We only have strategy type at depth 1. At depth 2, we inherit from parent.
+        st_type = node.metadata.get("strategy_type")
+        if not st_type and node.parent_id:
+             # Try to find parent
+             from memory.student_memory import MemoryManager # Lazy import to avoid cycle if any
+             # Actually we use tree_memory in state
+             tree_mem = state["tree_memory"]
+             parent = tree_mem.get(node.parent_id)
+             if parent:
+                 st_type = parent.metadata.get("strategy_type")
+        
+        if st_type and st_type in preferences:
+            return preferences[st_type]["confidence"]
+        return 0.5 # Default neutral
+
+    # Check for meaningful ties in the top candidates
+    # We define a "tie" as scores within 0.05
+    tie_trace = None
+    
+    if len(sorted_frontier) >= 2:
+        top_1 = sorted_frontier[0]
+        top_2 = sorted_frontier[1]
+        
+        if abs(top_1.path_score - top_2.path_score) < 0.05:
+            # Tie detected!
+            score_diff = abs(top_1.path_score - top_2.path_score)
+            p1 = get_preference_score(top_1)
+            p2 = get_preference_score(top_2)
+            
+            tie_trace = {
+                "triggered": True,
+                "candidates": [
+                    {"content": top_1.content, "score": top_1.path_score, "pref_conf": p1},
+                    {"content": top_2.content, "score": top_2.path_score, "pref_conf": p2}
+                ],
+                "resolution": "Student Preference Model"
+            }
+            
+            # Re-sort using Tuple: (Path Score rounded, Preference Score, Original Score)
+            # This prioritizes Preference when Path Score is roughly equal
+            sorted_frontier = sorted(frontier, key=lambda x: (
+                round(x.path_score * 10), # Group into 0.1 buckets roughly
+                get_preference_score(x),
+                x.path_score
+            ), reverse=True)
+            
+            print(f"--- TIE BREAKING TRIGGERED: {top_1.content} vs {top_2.content} ---")
+
     beam = sorted_frontier[:CONFIG.beam_width]
     
-    return {**state, "frontier": beam}
+    new_state = {**state, "frontier": beam}
+    if tie_trace:
+        new_state["tie_break_trace"] = tie_trace
+        
+    return new_state
 
 def check_stop_condition(state: AgentState) -> str:
     """
@@ -469,10 +544,53 @@ def finalize_output(state: AgentState) -> AgentState:
     # Extract Policy Info from Strategy Node (Depth 1)
     policy_id = "N/A"
     policy_name = "N/A"
+    strategy_type = "visual_explanation" # Default
+    
     if len(path) > 1:
         strategy_node = path[1]
         policy_id = strategy_node.metadata.get("policy_id", "N/A")
         policy_name = strategy_node.metadata.get("policy_name", "N/A")
+        strategy_type = strategy_node.metadata.get("strategy_type", "visual_explanation")
+
+    # COMPUTE OUTCOME & UPDATE PROFILE
+    # We need "previous" CV state. Since we don't have a real time loop in this script, 
+    # we'll simulate it by comparing 'test_cv_state' (initial) vs a 'final' state.
+    # In a real system, we'd persist the session.
+    # For now, we will Mock a "Post-Interaction" CV state to demonstrate the logic.
+    
+    initial_cv = state["context_data"]["cv"]
+    # Mock result: If strategy matched preference, improve engagement? 
+    # Or just random for now + logic?
+    # Let's derive it from the Node Score effectively. High Node Score -> likely good outcome.
+    
+    simulated_final_cv = initial_cv.copy()
+    if best_node and best_node.path_score > 0.8:
+        simulated_final_cv["engagement_score"] += 0.2
+        simulated_final_cv["engagement_state"] = "highly_engaged"
+    else:
+        simulated_final_cv["engagement_score"] -= 0.1
+        
+    outcome = compute_outcome(initial_cv, simulated_final_cv)
+    
+    # Update DB
+    memory = MemoryManager()
+    memory.update_learning_preference(
+        state["student_id"], 
+        strategy_type, 
+        outcome["success"]
+    )
+    
+    # Log Interaction
+    interaction_log = {
+        "student_id": state["student_id"],
+        "query": state["user_query"],
+        "strategy_label": strategy_label,
+        "strategy_type": strategy_type,
+        "outcome": outcome,
+        "path_score": best_node.path_score if best_node else 0,
+        "tie_break": state.get("tie_break_trace")
+    }
+    memory.save_interaction(interaction_log)
 
     return {
         **state,
@@ -480,7 +598,8 @@ def finalize_output(state: AgentState) -> AgentState:
         "reasoning_trace": trace,
         "selected_strategy_label": strategy_label,
         "policy_action_id": policy_id,
-        "policy_action_name": policy_name
+        "policy_action_name": policy_name,
+        "interaction_outcome": outcome
     }
 
 # --- Graph ---

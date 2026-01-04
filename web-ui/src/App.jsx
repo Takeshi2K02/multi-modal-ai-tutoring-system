@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import ScenarioControls from './components/Sidebar/ScenarioControls';
 import TreeVisualizer from './components/Graph/TreeVisualizer';
 import SignalsPanel from './components/Graph/SignalsPanel';
+import StudentProfilePanel from './components/StudentProfilePanel';
 import GoalDecomposition from './pages/GoalDecomposition';
 import TOC from './pages/TableOfContents';
 import { runSimulation } from './services/api';
@@ -82,6 +83,16 @@ function App() {
 
         {/* Context / Signals Panel (Top Right) */}
         <SignalsPanel data={graphData?.meta?.context_data} />
+
+        {/* Student Profile Panel (Bottom Right) */}
+        <div className="absolute bottom-6 right-6 w-80 z-40 max-h-[400px] flex flex-col pointer-events-none">
+          <div className="pointer-events-auto shadow-xl h-full flex flex-col">
+            <StudentProfilePanel
+              profile={graphData?.meta?.profile}
+              tieTrace={graphData?.meta?.tie_break_trace}
+            />
+          </div>
+        </div>
 
         {/* Error Toast */}
         {error && (

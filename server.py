@@ -101,7 +101,9 @@ def transform_state_to_graph(state: AgentState) -> GraphResponse:
                 "total_nodes": len(tree_memory),
                 "depth": state.get("frontier", [ThoughtNode(content="", depth=0)])[0].depth if state.get("frontier") else 0
             },
-            "context_data": state.get("context_data", {}) # Expose CV/RL signals to UI
+            "context_data": state.get("context_data", {}), # Expose CV/RL signals to UI
+            "profile": state.get("profile", {}),
+            "tie_break_trace": state.get("tie_break_trace")
         }
     )
 

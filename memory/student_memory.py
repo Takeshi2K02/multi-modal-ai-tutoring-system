@@ -13,17 +13,64 @@ class MemoryManager:
         """
         Retrieves student profile from DB. 
         Falls back to mock if not found or DB unavailable.
+        Ensures 'learning_preferences' field exists.
         """
+        profile = None
         if self.students is not None:
             profile = self.students.find_one({"student_id": student_id})
-            if profile:
-                # Remove MongoDB _id for clean return
-                if "_id" in profile:
-                    del profile["_id"]
-                return profile
+            if profile and "_id" in profile:
+                del profile["_id"]
         
-        print(f"Memory: Student {student_id} not found in DB (or DB unavailable). Using mock.")
-        return get_mock_student_profile(student_id, randomized=False)
+        if not profile:
+            print(f"Memory: Student {student_id} not found in DB (or DB unavailable). Using mock.")
+            profile = get_mock_student_profile(student_id, randomized=False)
+
+        # Ensure learning_preferences exists
+        if "learning_preferences" not in profile:
+            from agent_core.strategy_taxonomy import StrategyType
+            profile["learning_preferences"] = {
+                st.value: {
+                    "confidence": 0.5,
+                    "trials": 0,
+                    "successes": 0,
+                    "last_updated": None
+                }
+                for st in StrategyType
+            }
+        
+        return profile
+
+    def update_learning_preference(self, student_id: str, strategy_type: str, success: bool):
+        """
+        Updates the confidence score for a learning strategy based on outcome.
+        Rule: confidence = (successes + 1) / (trials + 2)  [Laplace Smoothing]
+        """
+        if self.students is None:
+            return
+
+        # Fetch current profile
+        profile = self.get_student_profile(student_id)
+        prefs = profile.get("learning_preferences", {})
+        
+        if strategy_type not in prefs:
+            prefs[strategy_type] = {"confidence": 0.5, "trials": 0, "successes": 0, "last_updated": None}
+            
+        stat = prefs[strategy_type]
+        stat["trials"] += 1
+        if success:
+            stat["successes"] += 1
+            
+        # Outcomes Update Rule (Laplace Smoothing / Beta Mean)
+        stat["confidence"] = (stat["successes"] + 1) / (stat["trials"] + 2)
+        stat["last_updated"] = datetime.now()
+        
+        # Save back to DB
+        self.students.update_one(
+            {"student_id": student_id},
+            {"$set": {"learning_preferences": prefs}},
+            upsert=True
+        )
+        print(f"Memory: Updated preference for {strategy_type} -> {stat['confidence']:.2f}")
 
     def save_interaction(self, interaction_data: Dict[str, Any]):
         """
