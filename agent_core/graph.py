@@ -37,7 +37,7 @@ def retrieve_context(state: AgentState) -> AgentState:
     # Mocks
     test_cv_state = state.get("context_data", {}).get("test_cv_state", "neutral")
     cv_data = get_mock_cv_inputs(state=test_cv_state)
-    rl_strategy = get_mock_rl_strategy()
+    rl_strategy = get_mock_rl_strategy() # Returns Dict with action_id, reasoning, etc.
     
     context_data = {
         "cv": cv_data,
@@ -107,7 +107,8 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
     query = state["user_query"]
     
     import time
-    
+    import json
+
     max_retries = 3
     base_delay = 5
 
@@ -115,13 +116,26 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
         # Generate Strategies
         prompt = PromptTemplate(
             template="""
+            Role: You are a strict JSON data generator. You do not speak or explain.
+            
             Student: {profile}
-            Context: {cv}
-            RL Suggestion: {rl}
+            
+            REAL-TIME SIGNALS:
+            CV Data: {cv}
+            RL Policy: {rl}
+            
             Goal: {query}
             
-            Generate {k} distinct high-level teaching strategies.
-            Return JSON: {{ "options": [ {{ "label": "Strategy Name", "approach": "Brief description" }}, ... ] }}
+            TASK: Generate {k} teaching strategies based on signals.
+            
+            OUTPUT RULES:
+            1. Return ONLY valid JSON.
+            2. NO introductory text (e.g. "Here returns...").
+            3. NO markdown blocks (```json).
+            4. Start output immediately with {{.
+            
+            JSON FORMAT:
+            {{ "options": [ {{ "label": "Strategy Name", "approach": "Description" }}, ... ] }}
             """,
             input_variables=["profile", "cv", "rl", "query", "k"]
         )
@@ -130,7 +144,9 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
             try:
                 chain = prompt | llm | JsonOutputParser()
                 res = chain.invoke({
-                    "profile": str(profile), "cv": str(context["cv"]), "rl": context["rl_hint"],
+                    "profile": str(profile), 
+                    "cv": json.dumps(context["cv"], ensure_ascii=False), 
+                    "rl": json.dumps(context["rl_hint"], ensure_ascii=False),
                     "query": query, "k": CONFIG.branching_factor
                 })
                 return [{"content": opt["label"], "metadata": {"approach": opt["approach"], "type": "strategy"}} for opt in res.get("options", [])]
@@ -147,14 +163,22 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
         # Generate Substeps / Content for the Strategy
         prompt = PromptTemplate(
             template="""
+            Role: You are a strict JSON data generator. You do not speak.
+            
             Student: {profile}
             Context: {cv}
-            Chosen Strategy: {strategy} (Approach: {approach})
+            Strategy: {strategy} ({approach})
             Goal: {query}
             
-            Generate the actual tutoring response/step-by-step explanation using this strategy.
-            Return JSON: {{ "options": [ {{ "text": "Full explanation text...", "focus": "Key focus area" }} ] }}
-            (Generate {k} variations)
+            TASK: Generate {k} variations of explanation.
+            
+            OUTPUT RULES:
+            1. Return ONLY valid JSON.
+            2. NO introductory text.
+            3. Start output immediately with {{.
+            
+            JSON FORMAT: 
+            {{ "options": [ {{ "text": "Explanation content...", "focus": "Main focus" }}, ... ] }}
             """,
             input_variables=["profile", "cv", "strategy", "approach", "query", "k"]
         )
@@ -163,7 +187,8 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                 chain = prompt | llm | JsonOutputParser()
                 parent_approach = parent_node.metadata.get("approach", "")
                 res = chain.invoke({
-                    "profile": str(profile), "cv": str(context["cv"]), 
+                    "profile": str(profile), 
+                    "cv": json.dumps(context["cv"], ensure_ascii=False), 
                     "strategy": parent_node.content, "approach": parent_approach,
                     "query": query, "k": CONFIG.branching_factor
                 })
@@ -230,19 +255,23 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
     # Use LLM to score relevance
     prompt = PromptTemplate(
         template="""
+        Role: You are a strict scoring engine.
+        
         Goal: {query}
-        Context: {cv}
-        Student Profile: {profile}
+        Evaluator Data: {cv}
+        Student: {profile}
         
-        Item to Evaluate (Depth {depth}): "{content}"
-        Metadata: {metadata}
+        Candidate: "{content}"
         
-        Score this item (0.0 to 1.0) on: 
-        1. Alignment with Goal
-        2. Suitability for Student State (e.g. if bored -> interactive?)
-        3. Quality of content
+        CRITERIA:
+        1. Context Match (Confused -> Scaffolded? Bored -> Fun?)
+        2. RL Alignment
         
-        Return JSON: {{ "score": 0.8 }}
+        OUTPUT RULES:
+        1. Return ONLY valid JSON.
+        2. Start with {{.
+        
+        JSON FORMAT: {{ "score": 0.85 }}
         """,
         input_variables=["query", "cv", "profile", "depth", "content", "metadata"]
     )
@@ -250,7 +279,7 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
     try:
         res = chain.invoke({
             "query": state["user_query"],
-            "cv": str(state["context_data"]["cv"]),
+            "cv": json.dumps(state["context_data"]["cv"], ensure_ascii=False),
             "profile": str(state["profile"]),
             "depth": node.depth,
             "content": node.content,
