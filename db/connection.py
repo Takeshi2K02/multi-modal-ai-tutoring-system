@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import certifi
+
 # Use the URI from the prompt as default, but allow env var override
 MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://admin:admin@cluster0.ngps8t9.mongodb.net/?appName=Cluster0")
 
@@ -13,7 +15,8 @@ def get_db_connection():
     Returns the database object.
     """
     try:
-        client = MongoClient(MONGO_URI)
+        # tlsCAFile=certifi.where() fixes SSL certificate verify failed on Mac
+        client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
         # Verify connection
         client.admin.command('ping')
         print("Pinged your deployment. You successfully connected to MongoDB!")
