@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+import json
 
 from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
@@ -107,7 +108,6 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
     query = state["user_query"]
     
     import time
-    import json
 
     max_retries = 3
     base_delay = 5
@@ -259,6 +259,7 @@ def evaluate_frontier(state: AgentState) -> AgentState:
 
 def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
     # Use LLM to score relevance
+    # Use LLM to score relevance
     prompt = PromptTemplate(
         template="""
         Role: You are a strict scoring engine.
@@ -276,6 +277,7 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
         OUTPUT RULES:
         1. Return ONLY valid JSON.
         2. Start with {{.
+        3. NO markdown.
         
         JSON FORMAT: {{ "score": 0.85 }}
         """,
@@ -291,8 +293,14 @@ def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[
             "content": node.content,
             "metadata": str(node.metadata)
         })
-        return float(res.get("score", 0.5))
-    except:
+        # Robust extraction
+        score = res.get("score")
+        if score is None:
+            print(f"Scoring Warning: No 'score' key in {res}")
+            return 0.5
+        return float(score)
+    except Exception as e:
+        print(f"Scoring Failed for node {node.id[:8]}: {e}")
         return 0.5
 
 def prune_frontier(state: AgentState) -> AgentState:
