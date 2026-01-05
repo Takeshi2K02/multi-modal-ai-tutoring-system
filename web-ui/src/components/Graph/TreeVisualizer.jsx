@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import ReactFlow, {
     Background,
     Controls,
@@ -69,19 +69,69 @@ const TreeVisualizer = ({ data }) => {
 
     const nodeTypes = useMemo(() => ({ thoughtNode: ThoughtNode }), []);
 
-    // Effect to update graph when data changes
+    // Progressive Rendering State
+    const [fullLayout, setFullLayout] = useState(null);
+    const [playbackIndex, setPlaybackIndex] = useState(0);
+    const [isPybackComplete, setIsPlaybackComplete] = useState(false);
+
+    // 1. Initial Layout Calculation (Runs once when data arrives)
     React.useEffect(() => {
         if (data && data.nodes && data.edges) {
             const layouted = getLayoutedElements(data.nodes, data.edges);
-            setNodes(layouted.nodes);
-            setEdges(layouted.edges);
 
-            // Wait for render then fit view
-            setTimeout(() => {
-                fitView({ padding: 0.2, duration: 800 });
-            }, 50);
+            // Sort nodes by rank/depth visually (Top-Down BFS roughly based on Y position)
+            // This ensures they appear top-to-bottom, "thinking" step by step.
+            const sortedNodes = [...layouted.nodes].sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+
+            setFullLayout({ nodes: sortedNodes, edges: layouted.edges });
+            setPlaybackIndex(0);
+            setIsPlaybackComplete(false);
+            setNodes([]); // Start empty
+            setEdges([]);
         }
-    }, [data, setNodes, setEdges, fitView]);
+    }, [data, setNodes, setEdges]); // Removed fitView dependency to avoid loops
+
+    // 2. Playback Loop
+    React.useEffect(() => {
+        if (!fullLayout || isPybackComplete) return;
+
+        const interval = setInterval(() => {
+            setPlaybackIndex((prev) => {
+                const nextIndex = prev + 1;
+
+                // Check if done
+                if (nextIndex >= fullLayout.nodes.length) {
+                    setIsPlaybackComplete(true);
+                    return prev; // Stop incrementing
+                }
+                return nextIndex;
+            });
+        }, 800); // 800ms per node "thought"
+
+        return () => clearInterval(interval);
+    }, [fullLayout, isPybackComplete]);
+
+    // 3. Render Visible Graph based on Index
+    React.useEffect(() => {
+        if (!fullLayout) return;
+
+        const visibleNodes = fullLayout.nodes.slice(0, playbackIndex + 1);
+        const visibleNodeIds = new Set(visibleNodes.map(n => n.id));
+
+        // Connect edges only if both source and target are visible
+        const visibleEdges = fullLayout.edges.filter(e =>
+            visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target)
+        );
+
+        setNodes(visibleNodes);
+        setEdges(visibleEdges);
+
+        // Smooth Fit View on updates
+        if (visibleNodes.length > 0) {
+            fitView({ padding: 0.2, duration: 500 }); // Smooth pan
+        }
+
+    }, [playbackIndex, fullLayout, setNodes, setEdges, fitView]);
 
     return (
         <div className="flex-1 h-full bg-slate-950">
@@ -93,6 +143,7 @@ const TreeVisualizer = ({ data }) => {
                 nodeTypes={nodeTypes}
                 fitView
                 attributionPosition="bottom-right"
+                nodesDraggable={false} // Keep layout stable during playback
             >
                 <Background color="#1e293b" gap={20} />
                 <Controls className="bg-white/10 border-white/20 fill-slate-300 text-slate-300" />
