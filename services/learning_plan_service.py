@@ -21,7 +21,7 @@ class LearningPlanService:
         plan_doc = {
             "student_id": "student_001", # Hardcoded for Single-Player MVP
             "original_goal": data.get("goal", ""),
-            "normalized_goal": data.get("goal", ""), # Fallback
+            "normalized_goal": data.get("generatedTitle") or data.get("goal", "").title(), # Use generated title
             "status": "ACTIVE",
             "created_at": datetime.now(),
             "updated_at": datetime.now(),

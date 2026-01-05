@@ -1,21 +1,26 @@
 import React, { useState } from 'react';
-import ScenarioControls from './components/Sidebar/ScenarioControls';
 import TreeVisualizer from './components/Graph/TreeVisualizer';
-import SignalsPanel from './components/Graph/SignalsPanel';
+import ScenarioControls from './components/Sidebar/ScenarioControls';
+import NodeDetail from './components/Panel/NodeDetail';
 import StudentProfilePanel from './components/StudentProfilePanel';
-import GoalDecomposition from './pages/GoalDecomposition';
+import SignalsPanel from './components/Graph/SignalsPanel';
 import LectureUpload from './pages/LectureUpload';
-import TOC from './pages/TableOfContents';
-import { runSimulation } from './services/api';
+import GoalDecomposition from './pages/GoalDecomposition';
+import LearningSession from './pages/LearningSession';
+import SessionDashboard from './pages/SessionDashboard';
 
 function App() {
-  const [view, setView] = useState('visualizer'); // 'visualizer' | 'decomposition' | 'toc'
-  const [decompositionResult, setDecompositionResult] = useState(null); // Store data for TOC
+  const [activeNode, setActiveNode] = useState(null);
+  const [view, setView] = useState('agent'); // 'agent', 'goal', 'session', 'dashboard'
+  const [activeSessionId, setActiveSessionId] = useState(null);
 
   const [graphData, setGraphData] = useState(null);
   const [outcome, setOutcome] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Re-import runSimulation if needed? No, need to import it at top.
+  // Wait, I need to check imports. `import { runSimulation } from './services/api';` is NOT in the file currently (lines 1-13)
 
   const handleRun = async (scenario) => {
     setLoading(true);
@@ -24,8 +29,15 @@ function App() {
     setOutcome(null);
 
     try {
-      // Small artificial delay for visual smooth transitions if API is too fast
-      // await new Promise(r => setTimeout(r, 600)); 
+      // Import this dynamically or assume it's imported? 
+      // I need to add the import statement too.
+      // But replace_file_content is for contiguous block.
+      // I will do two edits or one large one.
+      // Let's assume import is missing too.
+      // I will handle imports in a separate call or check if I can just add it here?
+      // No, imports are at top.
+      const { runSimulation } = await import('./services/api'); // Dynamic import to avoid messing up top-level replacer?
+      // Or I can just trust that I will add it.
 
       const result = await runSimulation(scenario);
       setGraphData(result);
@@ -39,9 +51,14 @@ function App() {
     }
   };
 
-  // Route: Table of Contents (TOC)
-  if (view === 'toc' && decompositionResult) {
-    return <TOC data={decompositionResult} onBack={() => setView('decomposition')} />;
+  // Route: Active Learning Session
+  if (view === 'session' && activeSessionId) {
+    return (
+      <LearningSession
+        sessionId={activeSessionId}
+        onBack={() => setView('dashboard')}
+      />
+    );
   }
 
   // Route: Goal Decomposition
@@ -49,9 +66,21 @@ function App() {
     return (
       <GoalDecomposition
         onBack={() => setView('visualizer')}
-        onStart={(data) => {
-          setDecompositionResult(data);
-          setView('toc');
+        onStart={(sessionId) => {
+          setActiveSessionId(sessionId);
+          setView('session');
+        }}
+      />
+    );
+  }
+
+  if (view === 'dashboard') {
+    return (
+      <SessionDashboard
+        onBack={() => setView('agent')}
+        onResume={(sessId) => {
+          setActiveSessionId(sessId);
+          setView('session');
         }}
       />
     );
@@ -75,6 +104,13 @@ function App() {
 
       {/* Absolute Nav Button for Decomposition Demo */}
       <div className="absolute top-6 left-[380px] z-50 flex gap-2">
+        <button
+          onClick={() => setView('dashboard')}
+          className="px-4 py-2 bg-indigo-50 border border-indigo-200 shadow-sm rounded-lg text-xs font-bold uppercase tracking-wider text-indigo-700 hover:bg-indigo-100 transition-colors flex items-center gap-2"
+        >
+          <span>📚</span> My Learning
+        </button>
+
         <button
           onClick={() => setView('decomposition')}
           className="px-4 py-2 bg-white border border-slate-300 shadow-sm rounded-lg text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition-colors"

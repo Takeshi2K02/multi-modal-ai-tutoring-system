@@ -39,9 +39,14 @@ class GraphResponse(BaseModel):
     meta: Dict[str, Any]
 
 class SavePlanRequest(BaseModel):
-    plan_data: Dict[str, Any] # Full payload from decomposition result
+    plan_data: Dict[str, Any]
+
+class CreateSessionRequest(BaseModel):
+    plan_id: str
+    student_id: str
 
 from services.learning_plan_service import LearningPlanService
+from services.learning_session_service import LearningSessionService
 
 @app.post("/api/learning_plan/save")
 async def save_learning_plan(request: SavePlanRequest):
@@ -51,6 +56,49 @@ async def save_learning_plan(request: SavePlanRequest):
         return {"status": "success", "plan_id": plan_id}
     except Exception as e:
         print(f"Save Plan Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/session/create")
+async def create_session(request: CreateSessionRequest):
+    print(f"Received Create Session Request: plan_id={request.plan_id}, student_id={request.student_id}")
+    try:
+        service = LearningSessionService()
+        session_id = service.create_session(request.plan_id, request.student_id)
+        print(f"Session Created Successfully: {session_id}")
+        return {"status": "success", "session_id": session_id}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Create Session Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/session/{session_id}")
+async def get_session(session_id: str):
+    service = LearningSessionService()
+    data = service.get_session_details(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """
+    Delete a learning session.
+    """
+    service = LearningSessionService()
+    success = service.delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found or could not be deleted")
+    return {"message": "Session deleted successfully"}
+
+@app.get("/api/sessions/student/{student_id}")
+async def get_student_sessions(student_id: str):
+    try:
+        service = LearningSessionService()
+        sessions = service.get_sessions_by_student(student_id)
+        return {"sessions": sessions}
+    except Exception as e:
+        print(f"List Sessions Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

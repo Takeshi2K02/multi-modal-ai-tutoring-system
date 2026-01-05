@@ -201,7 +201,23 @@ def decompose_goal(goal: str) -> Dict[str, Any]:
         # Generic Gap check (future: use LLM to identify gaps in user's custom goal)
         pass
 
-    # 6. Final Status Determination
+    # 6. Generate Professional Course Title
+    try:
+        title_prompt = f"""
+        You are an Academic Course Creator.
+        User Goal: "{goal}"
+        
+        Task: Generate a concise, professional course title (5-10 words).
+        - No "I want to learn..."
+        - Use academic style (e.g., "Introduction to Linear Algebra", "Advanced Machine Learning Concepts").
+        - Return ONLY the title text.
+        """
+        title_res = llm.invoke([HumanMessage(content=title_prompt)])
+        response["generatedTitle"] = title_res.content.replace('"', '').strip()
+    except Exception:
+        response["generatedTitle"] = goal.title()
+
+    # 7. Final Status Determination
     if response["evidenceCoverage"] > 0.4 and final_toc:
         response["status"] = "GOOD"
         response["showStartButton"] = True
