@@ -41,12 +41,7 @@ const StudentProfilePanel = ({ profile, tieTrace, isDemoMode, demoPersona }) => 
     return (
         <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-700/50 overflow-hidden flex flex-col h-full ring-1 ring-white/10 relative">
 
-            {/* Demo Mode Banner */}
-            {isDemoMode && demoPersona && (
-                <div className="bg-indigo-500 text-white text-[10px] font-bold uppercase tracking-widest text-center py-1">
-                    Demo Perspective: {demoPersona.type}
-                </div>
-            )}
+
 
             <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 text-white relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-10">

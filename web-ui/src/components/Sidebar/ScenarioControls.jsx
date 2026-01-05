@@ -28,17 +28,15 @@ const ScenarioCard = ({ title, desc, icon, active, onClick, colorClass }) => (
     </button>
 );
 
-const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode, demoPersona }) => {
+const ScenarioControls = ({
+    onRun, isRunning, outcome, topicContext, isDemoMode, demoPersona,
+    showProfile, setShowProfile, showCV, setShowCV, showRL, setShowRL
+}) => {
     const [scenario, setScenario] = React.useState('confused');
+    const isFinished = !!outcome;
 
     return (
         <div className="w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col z-20 shadow-2xl relative">
-            {/* Demo Mode Overlay Banner */}
-            {isDemoMode && (
-                <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold uppercase tracking-widest text-center py-1.5 shadow-md z-50">
-                    ⚠️ Demo Mode: Auto-Pilot Active
-                </div>
-            )}
 
             {/* Header */}
             <div className="p-5 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
@@ -62,7 +60,7 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode,
                     <span className="text-slate-200 font-bold not-italic">Note:</span> This view exposes the internal "Tree of Thought" reasoning process. In a production student-facing app, this would happen invisibly in the background.
                 </div>
 
-                {/* Scenario Selection */}
+                {/* Scenario Selection (Locked in Auto Mode) */}
                 <section className={isDemoMode ? 'opacity-50 pointer-events-none grayscale' : ''}>
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 block flex items-center gap-2">
                         <User size={12} /> Select Student Persona
@@ -72,7 +70,7 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode,
                             title="Confused Student"
                             desc="Low grasp, needs breakdown. CV detects confusion."
                             icon="😕"
-                            active={scenario === 'confused'}
+                            active={demoPersona ? demoPersona.id === 'visual_confused' : scenario === 'confused'}
                             onClick={() => setScenario('confused')}
                             colorClass="ring-blue-500"
                         />
@@ -80,7 +78,7 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode,
                             title="Bored Student"
                             desc="High grasp but low engagement. Needs gamification."
                             icon="🥱"
-                            active={scenario === 'bored'}
+                            active={demoPersona ? demoPersona.id === 'textual_bored' : scenario === 'bored'}
                             onClick={() => setScenario('bored')}
                             colorClass="ring-purple-500"
                         />
@@ -90,18 +88,23 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode,
                 {/* Run Button */}
                 <button
                     onClick={() => onRun(isDemoMode && demoPersona ? demoPersona.state : "confused")}
-                    disabled={isRunning || isDemoMode}
+                    disabled={isRunning || isDemoMode || isFinished}
                     className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
                 >
                     {isRunning ? (
                         <>
                             <Loader2 className="animate-spin" size={20} />
-                            <span>{isDemoMode ? "Auto-Reasoning..." : "Thinking..."}</span>
+                            <span>Reasoning...</span>
+                        </>
+                    ) : isFinished ? (
+                        <>
+                            <CheckCircle size={20} className="text-emerald-400" />
+                            <span>Simulation Complete</span>
                         </>
                     ) : (
                         <>
                             <Play size={20} className="fill-white" />
-                            <span>{isDemoMode ? "Simulating Strategy..." : "Run Strategy Simulation"}</span>
+                            <span>{isDemoMode ? "Auto-Starting..." : "Run Simulation"}</span>
                         </>
                     )}
                 </button>
@@ -134,6 +137,31 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode,
                         </motion.div>
                     )}
                 </AnimatePresence>
+            </div>
+
+            {/* View Toggles (Bottom Bar) */}
+            <div className="p-3 bg-slate-950 border-t border-slate-800 grid grid-cols-3 gap-2">
+                <button
+                    onClick={() => setShowProfile(!showProfile)}
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors ${showProfile ? 'bg-slate-800 text-white ring-1 ring-slate-600' : 'text-slate-500 hover:bg-slate-900 hover:text-slate-300'}`}
+                >
+                    <User size={16} className="mb-1" />
+                    Profile
+                </button>
+                <button
+                    onClick={() => setShowCV(!showCV)}
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors ${showCV ? 'bg-emerald-900/30 text-emerald-400 ring-1 ring-emerald-800' : 'text-slate-500 hover:bg-slate-900 hover:text-slate-300'}`}
+                >
+                    <div className="mb-1 text-lg">📷</div>
+                    CV Input
+                </button>
+                <button
+                    onClick={() => setShowRL(!showRL)}
+                    className={`flex flex-col items-center justify-center p-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-colors ${showRL ? 'bg-indigo-900/30 text-indigo-400 ring-1 ring-indigo-800' : 'text-slate-500 hover:bg-slate-900 hover:text-slate-300'}`}
+                >
+                    <div className="mb-1 text-lg">🤖</div>
+                    RL Input
+                </button>
             </div>
         </div>
     );
