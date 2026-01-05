@@ -38,6 +38,22 @@ class GraphResponse(BaseModel):
     edges: List[Dict[str, Any]]
     meta: Dict[str, Any]
 
+class SavePlanRequest(BaseModel):
+    plan_data: Dict[str, Any] # Full payload from decomposition result
+
+from services.learning_plan_service import LearningPlanService
+
+@app.post("/api/learning_plan/save")
+async def save_learning_plan(request: SavePlanRequest):
+    try:
+        service = LearningPlanService()
+        plan_id = service.save_learning_plan(request.plan_data)
+        return {"status": "success", "plan_id": plan_id}
+    except Exception as e:
+        print(f"Save Plan Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def transform_state_to_graph(state: AgentState) -> GraphResponse:
     tree_memory = state["tree_memory"]
     best_node = state["best_node"]

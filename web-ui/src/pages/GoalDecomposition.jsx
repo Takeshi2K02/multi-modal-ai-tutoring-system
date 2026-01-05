@@ -18,6 +18,7 @@ const GoalDecomposition = ({ onBack, onStart }) => {
     const [goal, setGoal] = useState("I want to learn linear algebra");
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
 
     const handleCheck = async () => {
@@ -104,10 +105,23 @@ const GoalDecomposition = ({ onBack, onStart }) => {
 
                                 {result.showStartButton && (
                                     <button
-                                        onClick={() => onStart(result)}
-                                        className="px-6 py-3 bg-emerald-500 text-white font-bold rounded-lg shadow-lg shadow-emerald-200 hover:bg-emerald-600 hover:scale-105 transition-all text-sm flex items-center gap-2"
+                                        onClick={async () => {
+                                            setSaving(true);
+                                            try {
+                                                const { saveLearningPlan } = await import('../services/api');
+                                                const saved = await saveLearningPlan(result);
+                                                console.log("Plan saved:", saved);
+                                                onStart(result); // Proceed to navigation
+                                            } catch (e) {
+                                                alert("Failed to save learning plan!");
+                                                console.error(e);
+                                                setSaving(false);
+                                            }
+                                        }}
+                                        disabled={saving}
+                                        className="px-6 py-3 bg-emerald-500 text-white font-bold rounded-lg shadow-lg shadow-emerald-200 hover:bg-emerald-600 hover:scale-105 transition-all text-sm flex items-center gap-2 disabled:opacity-70 disabled:cursor-wait"
                                     >
-                                        🚀 Start Learning (Evidence Backed)
+                                        {saving ? 'Saving...' : '🚀 Start Learning (Evidence Backed)'}
                                     </button>
                                 )}
                             </div>

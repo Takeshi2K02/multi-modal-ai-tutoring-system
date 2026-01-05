@@ -22,3 +22,13 @@ export const decomposeGoal = async (goal) => {
         throw error;
     }
 };
+
+export const saveLearningPlan = async (planData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/learning_plan/save`, { plan_data: planData });
+        return response.data;
+    } catch (error) {
+        console.error("API Connection Error:", error);
+        throw error;
+    }
+};
