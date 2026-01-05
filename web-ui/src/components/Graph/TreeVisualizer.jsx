@@ -67,6 +67,8 @@ const TreeVisualizer = ({ data }) => {
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const { fitView } = useReactFlow();
 
+    const nodeTypes = useMemo(() => ({ thoughtNode: ThoughtNode }), []);
+
     // Effect to update graph when data changes
     React.useEffect(() => {
         if (data && data.nodes && data.edges) {
@@ -82,7 +84,7 @@ const TreeVisualizer = ({ data }) => {
     }, [data, setNodes, setEdges, fitView]);
 
     return (
-        <div className="flex-1 h-full bg-gray-50">
+        <div className="flex-1 h-full bg-slate-950">
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -92,8 +94,8 @@ const TreeVisualizer = ({ data }) => {
                 fitView
                 attributionPosition="bottom-right"
             >
-                <Background color="#ccc" gap={20} />
-                <Controls />
+                <Background color="#1e293b" gap={20} />
+                <Controls className="bg-white/10 border-white/20 fill-slate-300 text-slate-300" />
             </ReactFlow>
         </div>
     );
@@ -101,11 +103,12 @@ const TreeVisualizer = ({ data }) => {
 
 // Wrapper for ReactFlowProvider handled in parent usually, 
 // but needed for useReactFlow hook. 
-// We'll export a wrapped version or ensure parent has provider.
 import { ReactFlowProvider } from 'reactflow';
 
-export default (props) => (
-    <ReactFlowProvider>
-        <TreeVisualizer {...props} />
-    </ReactFlowProvider>
-);
+export default function WrappedTreeVisualizer(props) {
+    return (
+        <ReactFlowProvider>
+            <TreeVisualizer {...props} />
+        </ReactFlowProvider>
+    );
+}

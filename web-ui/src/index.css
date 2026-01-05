@@ -6,13 +6,13 @@
 
 @layer base {
   body {
-    @apply font-sans text-slate-800 bg-slate-50 antialiased;
+    @apply font-sans text-slate-50 bg-slate-950 antialiased selection:bg-indigo-500/30;
   }
 }
 
 /* --- Custom Utilities --- */
 .glass-panel {
-  @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-xl;
+  @apply bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 shadow-2xl shadow-black/20;
 }
 
 .mesh-gradient {
@@ -25,22 +25,22 @@
 
 /* --- React Flow Node Styling --- */
 .node-base {
-  @apply bg-white rounded-xl shadow-xl border border-slate-100 p-0 w-[350px] transition-all duration-300 hover:shadow-2xl hover:-translate-y-1;
+  @apply bg-slate-900 rounded-xl shadow-xl border border-slate-700 p-0 w-[350px] transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 hover:border-indigo-500/50;
 }
 
 .node-high-score {
-  @apply ring-2 ring-emerald-500/50 shadow-emerald-500/20;
+  @apply ring-2 ring-emerald-500/50 shadow-emerald-500/20 bg-emerald-950/30;
 }
 
 .node-low-score {
-  @apply opacity-80 grayscale-[0.5] hover:opacity-100 hover:grayscale-0;
+  @apply opacity-60 grayscale-[0.8] hover:opacity-100 hover:grayscale-0;
 }
 
 /* --- Edge Styling --- */
 .react-flow__edge-path {
   stroke-width: 2px;
-  stroke: #cbd5e1;
-  /* slate-300 */
+  stroke: #475569;
+  /* slate-600 */
 }
 
 .edge-selected path {

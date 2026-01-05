@@ -1,23 +1,21 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-
-// Note: Ensure framer-motion is installed: npm install framer-motion
-// If not available, we fall back to standard CSS transitions.
+import { Zap, Play, Loader2, User, ChevronRight } from 'lucide-react';
 
 const ScenarioCard = ({ title, desc, icon, active, onClick, colorClass }) => (
     <button
         onClick={onClick}
         className={`w-full group relative overflow-hidden rounded-xl p-4 text-left transition-all duration-300 border ${active
-                ? `bg-white shadow-lg scale-[1.02] border-transparent ring-2 ${colorClass}`
-                : 'bg-white/50 border-slate-200 hover:bg-white hover:shadow-md'
+            ? `bg-slate-800 shadow-lg scale-[1.02] border-transparent ring-2 ${colorClass}`
+            : 'bg-slate-800/40 border-slate-700 hover:bg-slate-800 hover:shadow-md'
             }`}
     >
         <div className="flex items-start gap-4 relative z-10">
-            <div className={`p-3 rounded-lg text-2xl ${active ? 'bg-slate-100' : 'bg-white'}`}>
+            <div className={`p-3 rounded-lg text-2xl ${active ? 'bg-slate-700' : 'bg-slate-900/50'} transition-colors`}>
                 {icon}
             </div>
             <div>
-                <h3 className={`font-bold text-sm ${active ? 'text-slate-800' : 'text-slate-600'}`}>
+                <h3 className={`font-bold text-sm ${active ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'} transition-colors`}>
                     {title}
                 </h3>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
@@ -34,14 +32,15 @@ const ScenarioControls = ({ onRun, isRunning, outcome }) => {
     const [scenario, setScenario] = React.useState('confused');
 
     return (
-        <aside className="w-96 flex flex-col h-full bg-slate-50/80 backdrop-blur-md border-r border-slate-200 z-20 shadow-xl">
+        <aside className="w-96 flex flex-col h-full bg-slate-900/90 backdrop-blur-md border-r border-slate-700/50 z-20 shadow-2xl">
             {/* Header */}
-            <div className="p-6 border-b border-slate-200/60 bg-white/50">
-                <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                    <span className="text-2xl">⚡️</span>
-                    <span>Antigravity<span className="text-blue-600">Core</span></span>
+            <div className="p-6 border-b border-slate-700/50 bg-slate-900/50">
+                <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                    <span className="text-blue-500"><Zap size={24} fill="currentColor" /></span>
+                    <span>Antigravity<span className="text-slate-500">Core</span></span>
                 </h1>
-                <p className="text-xs text-slate-500 mt-1 font-medium tracking-wide uppercase">
+                <p className="text-xs text-slate-500 mt-1 font-medium tracking-wide uppercase flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     Agentic Tree of Thought Debugger
                 </p>
             </div>
@@ -51,8 +50,8 @@ const ScenarioControls = ({ onRun, isRunning, outcome }) => {
 
                 {/* Scenario Selection */}
                 <section>
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 block">
-                        Select Student Persona
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 block flex items-center gap-2">
+                        <User size={12} /> Select Student Persona
                     </label>
                     <div className="space-y-3">
                         <ScenarioCard
@@ -80,18 +79,21 @@ const ScenarioControls = ({ onRun, isRunning, outcome }) => {
                         onClick={() => onRun(scenario)}
                         disabled={isRunning}
                         className={`w-full relative overflow-hidden rounded-xl py-4 font-bold text-sm text-white shadow-lg transition-all transform active:scale-95 ${isRunning
-                                ? 'bg-slate-400 cursor-wait'
-                                : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-blue-500/25'
+                            ? 'bg-slate-700 cursor-wait'
+                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-blue-500/25 hover:brightness-110'
                             }`}
                     >
                         <div className="flex items-center justify-center gap-2 relative z-10">
                             {isRunning ? (
                                 <>
-                                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /></svg>
+                                    <Loader2 className="animate-spin" size={18} />
                                     <span>Reasoning in progress...</span>
                                 </>
                             ) : (
-                                <span>Run Simulation</span>
+                                <>
+                                    <Play size={18} fill="currentColor" />
+                                    <span>Run Simulation</span>
+                                </>
                             )}
                         </div>
                     </button>
@@ -104,25 +106,25 @@ const ScenarioControls = ({ onRun, isRunning, outcome }) => {
                             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">
                                 Agent Decision
                             </label>
-                            <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-bold">Completed</span>
+                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-bold border border-emerald-500/20">Completed</span>
                         </div>
 
-                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
+                        <div className="bg-slate-800 rounded-xl shadow-sm border border-slate-700/50 p-4 space-y-4">
                             <div>
-                                <div className="text-xs text-slate-400 mb-1">Final Response</div>
-                                <p className="text-sm text-slate-700 leading-relaxed font-medium">
+                                <div className="text-xs text-slate-500 mb-1 font-mono">Final Response</div>
+                                <p className="text-sm text-slate-300 leading-relaxed font-medium">
                                     {outcome.meta?.final_response || "No response generated."}
                                 </p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-100">
-                                <div className="text-center p-2 bg-slate-50 rounded-lg">
-                                    <div className="text-xs text-slate-500">Tree Depth</div>
-                                    <div className="text-lg font-bold text-slate-800">{outcome.meta?.run_stats?.depth}</div>
+                            <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-700/50">
+                                <div className="text-center p-2 bg-slate-900/50 rounded-lg border border-slate-700/30">
+                                    <div className="text-xs text-slate-500 mb-1">Tree Depth</div>
+                                    <div className="text-lg font-bold text-white">{outcome.meta?.run_stats?.depth}</div>
                                 </div>
-                                <div className="text-center p-2 bg-slate-50 rounded-lg">
-                                    <div className="text-xs text-slate-500">Nodes Explored</div>
-                                    <div className="text-lg font-bold text-slate-800">{outcome.meta?.run_stats?.total_nodes}</div>
+                                <div className="text-center p-2 bg-slate-900/50 rounded-lg border border-slate-700/30">
+                                    <div className="text-xs text-slate-500 mb-1">Nodes Explored</div>
+                                    <div className="text-lg font-bold text-white">{outcome.meta?.run_stats?.total_nodes}</div>
                                 </div>
                             </div>
                         </div>
