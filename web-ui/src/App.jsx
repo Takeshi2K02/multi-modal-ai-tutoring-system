@@ -13,6 +13,7 @@ import SessionDashboard from './pages/SessionDashboard';
 function App() {
   const [view, setView] = useState('decomposition'); // Default: 'decomposition'
   const [activeSessionId, setActiveSessionId] = useState(null);
+  const [currentTopicContext, setCurrentTopicContext] = useState(null);
 
   // Agent State
   const [graphData, setGraphData] = useState(null);
@@ -28,7 +29,8 @@ function App() {
 
     try {
       const { runSimulation } = await import('./services/api');
-      const result = await runSimulation(scenario);
+      // Pass the current topic context if available
+      const result = await runSimulation(scenario, currentTopicContext);
       setGraphData(result);
       setOutcome(result);
     } catch (err) {
@@ -61,6 +63,12 @@ function App() {
           <LearningSession
             sessionId={activeSessionId}
             onBack={() => setView('dashboard')}
+            onStartLearning={(topic) => {
+              setCurrentTopicContext(topic);
+              setView('agent');
+              // Optional: Auto-run a default status check?
+              // For now, we let the user select a strategy manually on the Agent page
+            }}
           />
         );
 
@@ -81,7 +89,12 @@ function App() {
       case 'agent':
         return (
           <div className="flex h-full w-full relative">
-            <ScenarioControls onRun={handleRun} isRunning={loading} outcome={outcome} />
+            <ScenarioControls
+              onRun={handleRun}
+              isRunning={loading}
+              outcome={outcome}
+              topicContext={currentTopicContext}
+            />
 
             <div className="flex-1 relative h-full dots-pattern bg-slate-950">
               <TreeVisualizer data={graphData} />

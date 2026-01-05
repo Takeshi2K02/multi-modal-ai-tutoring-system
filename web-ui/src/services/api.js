@@ -3,9 +3,14 @@ import axios from 'axios';
 // Ensure this matches uvicorn port
 export const API_BASE_URL = 'http://127.0.0.1:8000';
 
-export const runSimulation = async (scenario) => {
+export const runSimulation = async (scenario, topicContext = null) => {
     try {
-        const response = await axios.post(`${API_BASE_URL}/api/run_sim`, { scenario });
+        const payload = { scenario };
+        if (topicContext) {
+            payload.topic_title = topicContext.title;
+            payload.topic_content = topicContext.content; // assuming context has content property or similar
+        }
+        const response = await axios.post(`${API_BASE_URL}/api/run_sim`, payload);
         return response.data;
     } catch (error) {
         console.error("API Connection Error:", error);

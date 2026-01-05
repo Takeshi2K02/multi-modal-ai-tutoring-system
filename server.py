@@ -29,6 +29,8 @@ async def startup_event():
 
 class ScenarioRequest(BaseModel):
     scenario: str # "confused" | "bored"
+    topic_title: Optional[str] = None
+    topic_content: Optional[str] = None
 
 class DecomposeRequest(BaseModel):
     goal: str
@@ -45,6 +47,7 @@ class CreateSessionRequest(BaseModel):
     plan_id: str
     student_id: str
 
+# ... (keep existing code)
 from services.learning_plan_service import LearningPlanService
 from services.learning_session_service import LearningSessionService
 
@@ -100,7 +103,6 @@ async def get_student_sessions(student_id: str):
     except Exception as e:
         print(f"List Sessions Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 def transform_state_to_graph(state: AgentState) -> GraphResponse:
     tree_memory = state["tree_memory"]
@@ -183,7 +185,14 @@ async def run_simulation(req: ScenarioRequest):
     print(f"Running scenario: {req.scenario}")
     
     student_id = "alex_123"
-    query = "Teach me the quadratic formula"
+    
+    # Use real topic if provided, else fallback to mock default
+    if req.topic_title:
+        query = f"I want to learn about {req.topic_title}"
+        print(f"Using Real Topic Context: {req.topic_title}")
+    else:
+        query = "Teach me the quadratic formula"
+        
     cv_state = "neutral"
     
     if req.scenario == "confused":
@@ -191,10 +200,15 @@ async def run_simulation(req: ScenarioRequest):
     elif req.scenario == "bored":
         cv_state = "bored"
         
+    # Inject real content into context if available
+    context_data = {"test_cv_state": cv_state}
+    if req.topic_content:
+        context_data["topic_content"] = req.topic_content
+        
     initial_state = {
         "student_id": student_id,
         "user_query": query,
-        "context_data": {"test_cv_state": cv_state},
+        "context_data": context_data,
         "frontier": [],
         "tree_memory": {},
         "best_node": None

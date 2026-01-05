@@ -1,6 +1,6 @@
 import React from 'react';
-import { motion } from 'framer-motion';
-import { Zap, Play, Loader2, User, ChevronRight } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Zap, Play, Loader2, User, ChevronRight, CheckCircle } from 'lucide-react';
 
 const ScenarioCard = ({ title, desc, icon, active, onClick, colorClass }) => (
     <button
@@ -28,25 +28,32 @@ const ScenarioCard = ({ title, desc, icon, active, onClick, colorClass }) => (
     </button>
 );
 
-const ScenarioControls = ({ onRun, isRunning, outcome }) => {
+const ScenarioControls = ({ onRun, isRunning, outcome, topicContext }) => {
     const [scenario, setScenario] = React.useState('confused');
 
     return (
-        <aside className="w-96 flex flex-col h-full bg-slate-900/90 backdrop-blur-md border-r border-slate-700/50 z-20 shadow-2xl">
+        <div className="w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col z-20 shadow-2xl">
             {/* Header */}
-            <div className="p-6 border-b border-slate-700/50 bg-slate-900/50">
-                <h1 className="text-xl font-bold text-white flex items-center gap-2">
-                    <span className="text-blue-500"><Zap size={24} fill="currentColor" /></span>
-                    <span>Antigravity<span className="text-slate-500">Core</span></span>
-                </h1>
-                <p className="text-xs text-slate-500 mt-1 font-medium tracking-wide uppercase flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Agentic Tree of Thought Debugger
-                </p>
+            <div className="p-5 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
+                <div className="flex items-center gap-2 text-indigo-400 mb-1">
+                    <Zap size={16} />
+                    <h2 className="text-xs font-bold uppercase tracking-widest">Agent Debugger</h2>
+                </div>
+                <h1 className="text-xl font-bold text-white tracking-tight">Strategy Simulation</h1>
+                {topicContext && (
+                    <div className="mt-3 p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-lg">
+                        <p className="text-[10px] text-indigo-300 font-bold uppercase mb-1">Current Active Context</p>
+                        <p className="text-xs text-white leading-tight font-medium line-clamp-2">{topicContext.title}</p>
+                    </div>
+                )}
             </div>
 
-            {/* Controls */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-5 space-y-6">
+
+                {/* Disclaimer */}
+                <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50 text-xs text-slate-400 italic">
+                    <span className="text-slate-200 font-bold not-italic">Note:</span> This view exposes the internal "Tree of Thought" reasoning process. In a production student-facing app, this would happen invisibly in the background.
+                </div>
 
                 {/* Scenario Selection */}
                 <section>
@@ -73,50 +80,40 @@ const ScenarioControls = ({ onRun, isRunning, outcome }) => {
                     </div>
                 </section>
 
-                {/* Action Area */}
-                <section>
-                    <button
-                        onClick={() => onRun(scenario)}
-                        disabled={isRunning}
-                        className={`w-full relative overflow-hidden rounded-xl py-4 font-bold text-sm text-white shadow-lg transition-all transform active:scale-95 ${isRunning
-                            ? 'bg-slate-700 cursor-wait'
-                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-blue-500/25 hover:brightness-110'
-                            }`}
-                    >
-                        <div className="flex items-center justify-center gap-2 relative z-10">
-                            {isRunning ? (
-                                <>
-                                    <Loader2 className="animate-spin" size={18} />
-                                    <span>Reasoning in progress...</span>
-                                </>
-                            ) : (
-                                <>
-                                    <Play size={18} fill="currentColor" />
-                                    <span>Run Simulation</span>
-                                </>
-                            )}
-                        </div>
-                    </button>
-                </section>
+                {/* Run Button */}
+                <button
+                    onClick={() => onRun("confused")} // Default to confused logic for demo
+                    disabled={isRunning}
+                    className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
+                >
+                    {isRunning ? (
+                        <>
+                            <Loader2 className="animate-spin" size={20} />
+                            <span>Thinking...</span>
+                        </>
+                    ) : (
+                        <>
+                            <Play size={20} className="fill-white" />
+                            <span>Run Strategy Simulation</span>
+                        </>
+                    )}
+                </button>
 
-                {/* Results */}
-                {outcome && (
-                    <div className="animate-fade-in-up">
-                        <div className="flex items-center justify-between mb-3">
-                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                                Agent Decision
-                            </label>
-                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-bold border border-emerald-500/20">Completed</span>
-                        </div>
-
-                        <div className="bg-slate-800 rounded-xl shadow-sm border border-slate-700/50 p-4 space-y-4">
-                            <div>
-                                <div className="text-xs text-slate-500 mb-1 font-mono">Final Response</div>
-                                <p className="text-sm text-slate-300 leading-relaxed font-medium">
-                                    {outcome.meta?.final_response || "No response generated."}
-                                </p>
+                {/* Outcome Panel */}
+                <AnimatePresence>
+                    {outcome && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            className="bg-slate-800/50 rounded-xl p-4 border border-slate-700 space-y-3 overflow-hidden"
+                        >
+                            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                                <CheckCircle size={14} className="text-emerald-500" />
+                                Optimal Strategy Found
+                            </h3>
+                            <div className="text-sm text-white font-medium p-3 bg-slate-900/50 rounded-lg border border-slate-800 leading-relaxed shadow-inner">
+                                {outcome.meta.final_response}
                             </div>
-
                             <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-700/50">
                                 <div className="text-center p-2 bg-slate-900/50 rounded-lg border border-slate-700/30">
                                     <div className="text-xs text-slate-500 mb-1">Tree Depth</div>
@@ -127,11 +124,11 @@ const ScenarioControls = ({ onRun, isRunning, outcome }) => {
                                     <div className="text-lg font-bold text-white">{outcome.meta?.run_stats?.total_nodes}</div>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                )}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
-        </aside>
+        </div>
     );
 };
 

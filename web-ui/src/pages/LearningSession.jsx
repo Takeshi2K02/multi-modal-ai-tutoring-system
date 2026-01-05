@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getSession } from '../services/api';
 import { ArrowLeft, BookOpen, CheckCircle, MessageSquare, Book, FileText, ChevronRight } from 'lucide-react';
 
-const LearningSession = ({ sessionId, onBack }) => {
+const LearningSession = ({ sessionId, onBack, onStartLearning }) => {
     const [sessionData, setSessionData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [activeTopic, setActiveTopic] = useState(null);
@@ -110,9 +110,12 @@ const LearningSession = ({ sessionId, onBack }) => {
                     </div>
 
                     <div className="flex gap-3">
-                        <button className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 hover:scale-105 transition-all flex items-center gap-2">
-                            <MessageSquare size={16} />
-                            <span>Ask Tutor</span>
+                        <button
+                            onClick={() => onStartLearning && onStartLearning(activeTopic)}
+                            className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 hover:scale-105 transition-all flex items-center gap-2"
+                        >
+                            <BookOpen size={16} />
+                            <span>Start Learning</span>
                         </button>
                         <button className="px-4 py-2 bg-slate-800 border border-slate-700 text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-700 hover:text-white transition-all flex items-center gap-2">
                             <CheckCircle size={16} />
