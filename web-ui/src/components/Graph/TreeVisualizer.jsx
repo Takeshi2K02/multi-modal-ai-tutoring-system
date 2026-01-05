@@ -18,8 +18,9 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     dagreGraph.setDefaultEdgeLabel(() => ({}));
 
     // Set node size (width 256px + padding, height approx 150px)
-    const nodeWidth = 280;
-    const nodeHeight = 160;
+    // Set node size (width 350px + padding, height approx 200px)
+    const nodeWidth = 400; // Increased to allow spacing
+    const nodeHeight = 220; // Increased height
 
     dagreGraph.setGraph({ rankdir: direction });
 
@@ -47,7 +48,17 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
         return node;
     });
 
-    return { nodes: layoutedNodes, edges };
+    const layoutedEdges = edges.map((edge) => ({
+        ...edge,
+        type: 'smoothstep',
+        animated: true,
+        style: {
+            stroke: '#64748b', // Slate-500
+            strokeWidth: 3
+        }
+    }));
+
+    return { nodes: layoutedNodes, edges: layoutedEdges };
 };
 
 

@@ -290,7 +290,13 @@ def _generate_children_content(state: AgentState, parent_node: ThoughtNode, targ
                 for opt in options:
                     directive = opt.get("directive", {})
                     # Fallback if LLM messes up structure but gives text
-                    content_text = directive.get("content", opt.get("text", "No content provided"))
+                    content_val = directive.get("content", opt.get("text", "No content provided"))
+                    
+                    # Ensure content is a string for ThoughtNode schema
+                    if isinstance(content_val, (list, dict)):
+                        content_text = json.dumps(content_val, ensure_ascii=False)
+                    else:
+                        content_text = str(content_val)
                     
                     children.append({
                         "content": content_text,

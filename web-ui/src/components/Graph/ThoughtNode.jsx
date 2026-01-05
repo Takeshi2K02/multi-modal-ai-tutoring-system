@@ -55,7 +55,7 @@ const ThoughtNode = ({ data, isConnectable }) => {
             <Handle type="target" position={Position.Top} className="!w-2 !h-2 !bg-slate-400" isConnectable={isConnectable} />
 
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 rounded-t-[10px]">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
                     {type || "Thought"}
                 </span>
@@ -78,7 +78,7 @@ const ThoughtNode = ({ data, isConnectable }) => {
             </div>
 
             {/* Footer */}
-            <div className="px-4 py-2 bg-slate-50 flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-100">
+            <div className="px-4 py-2 bg-slate-50 flex items-center justify-between text-[10px] text-slate-500 border-t border-slate-100 rounded-b-xl">
                 <span>Path Score</span>
                 <span className={clsx("font-mono font-semibold", isBestPath ? "text-emerald-600" : "text-slate-700")}>
                     {pathScore?.toFixed(2) ?? "0.00"}
