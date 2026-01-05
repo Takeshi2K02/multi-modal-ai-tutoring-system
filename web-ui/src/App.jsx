@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { clsx } from 'clsx';
 import { LayoutDashboard, BookOpen, BrainCircuit, Upload, Layers } from 'lucide-react';
 import TreeVisualizer from './components/Graph/TreeVisualizer';
@@ -9,17 +9,63 @@ import LectureUpload from './pages/LectureUpload';
 import GoalDecomposition from './pages/GoalDecomposition';
 import LearningSession from './pages/LearningSession';
 import SessionDashboard from './pages/SessionDashboard';
+import Navbar from './components/Navbar';
 
 function App() {
   const [view, setView] = useState('decomposition'); // Default: 'decomposition'
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [currentTopicContext, setCurrentTopicContext] = useState(null);
 
+  // Dynamic Title
+  useEffect(() => {
+    const titles = {
+      decomposition: 'EduSynth - Plan',
+      session: 'EduSynth - Learning',
+      dashboard: 'EduSynth - My Learning',
+      agent: 'EduSynth - Agent View',
+      upload: 'EduSynth - Upload'
+    };
+    document.title = titles[view] || 'EduSynth AI Tutor';
+  }, [view]);
+
   // Agent State
   const [graphData, setGraphData] = useState(null);
   const [outcome, setOutcome] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Demo Mode State
+  const [demoPersona, setDemoPersona] = useState(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+
+  // MOCK PERSONAS for Demo
+  const MOCK_PERSONAS = [
+    { id: 'visual_confused', name: 'Alex (Visual Learner)', type: 'Visual', state: 'confused', traits: ['Needs Diagrams', 'Low Prior Knowledge'] },
+    { id: 'textual_bored', name: 'Sam (Textual Learner)', type: 'Reading/Writing', state: 'bored', traits: ['Prefer Text', 'High Proficiency', 'Needs Challenge'] },
+    { id: 'handson_curious', name: 'Jordan (Kinesthetic)', type: 'Kinesthetic', state: 'neutral', traits: ['Learn by Doing', 'Active Experimentation'] }
+  ];
+
+  // Auto-Run Simulation on Agent View Entry
+  useEffect(() => {
+    if (view === 'agent' && currentTopicContext) {
+      setIsDemoMode(true);
+
+      // 1. Select Random Persona
+      const randomPersona = MOCK_PERSONAS[Math.floor(Math.random() * MOCK_PERSONAS.length)];
+      setDemoPersona(randomPersona);
+      console.log("Demo Mode: Persona Selected", randomPersona);
+
+      // 2. Auto-Run Simulation
+      // We add a small delay for visual effect so the user sees the transition
+      const timer = setTimeout(() => {
+        handleRun(randomPersona.state); // Use the persona's state to drive the sim logic
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    } else {
+      setIsDemoMode(false);
+    }
+  }, [view, currentTopicContext]);
 
   const handleRun = async (scenario) => {
     setLoading(true);
@@ -66,8 +112,6 @@ function App() {
             onStartLearning={(topic) => {
               setCurrentTopicContext(topic);
               setView('agent');
-              // Optional: Auto-run a default status check?
-              // For now, we let the user select a strategy manually on the Agent page
             }}
           />
         );
@@ -94,28 +138,30 @@ function App() {
               isRunning={loading}
               outcome={outcome}
               topicContext={currentTopicContext}
+              isDemoMode={isDemoMode}
+              demoPersona={demoPersona}
             />
 
             <div className="flex-1 relative h-full dots-pattern bg-slate-950">
               <TreeVisualizer data={graphData} />
-              <SignalsPanel data={graphData?.meta?.context_data} />
 
-              <div className="absolute bottom-6 right-6 w-80 z-40 max-h-[400px] flex flex-col pointer-events-none">
-                <div className="pointer-events-auto shadow-xl h-full flex flex-col glass-panel rounded-xl overflow-hidden">
-                  <StudentProfilePanel profile={graphData?.meta?.profile} tieTrace={graphData?.meta?.tie_break_trace} />
+              {/* Floating Signals Panel */}
+              <div className="absolute top-5 right-5 z-10 w-80 pointer-events-none">
+                <div className="pointer-events-auto transition-transform hover:scale-105">
+                  <SignalsPanel outcomeStatus={outcome?.meta?.context_data} />
                 </div>
               </div>
-
-              {error && (
-                <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 backdrop-blur border-l-4 border-red-500 shadow-xl px-6 py-4 rounded-r-lg flex items-center gap-3 animate-bounce">
-                  <span className="text-red-500 text-xl">⚠️</span>
-                  <div>
-                    <h4 className="font-bold text-red-100 text-sm">Connection Error</h4>
-                    <p className="text-xs text-red-200">{error}</p>
-                  </div>
-                  <button onClick={() => setError(null)} className="ml-4 text-slate-400 hover:text-slate-200">×</button>
+              {/* Student Profile Panel (Floating Demo Card) */}
+              <div className="absolute bottom-5 right-5 z-10 w-96 pointer-events-none flex flex-col gap-4">
+                <div className="pointer-events-auto transition-transform hover:scale-105">
+                  <StudentProfilePanel
+                    profile={outcome?.meta?.profile}
+                    tieBreakTrace={outcome?.meta?.tie_break_trace}
+                    isDemoMode={isDemoMode}
+                    demoPersona={demoPersona}
+                  />
                 </div>
-              )}
+              </div>
 
               {!graphData && !loading && !error && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -140,68 +186,15 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-50 overflow-hidden font-sans">
-      {/* Top Global Nav */}
-      <nav className="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md flex items-center justify-between px-6 shrink-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <BrainCircuit className="text-white w-5 h-5" />
-          </div>
-          <h1 className="font-bold text-lg tracking-tight text-slate-100">Antigravity<span className="text-indigo-400">Tutor</span></h1>
-        </div>
-
-        <div className="flex items-center gap-1 bg-slate-800/50 p-1 rounded-lg border border-slate-700/50">
-          <NavButton
-            active={view === 'decomposition' || view === 'upload'}
-            onClick={() => setView('decomposition')}
-            icon={<BookOpen size={18} />}
-            label="Plan & Decompose"
-          />
-          <NavButton
-            active={view === 'dashboard' || view === 'session'}
-            onClick={() => setView('dashboard')}
-            icon={<Layers size={18} />}
-            label="My Learning"
-          />
-          <NavButton
-            active={view === 'agent'}
-            onClick={() => setView('agent')}
-            icon={<BrainCircuit size={18} />}
-            label="Agent Internals"
-          />
-        </div>
-
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => setView('upload')}
-            className="flex items-center gap-2 text-xs font-bold text-slate-400 hover:text-indigo-400 transition-colors"
-          >
-            <Upload size={14} />
-            <span>Upload Context</span>
-          </button>
-        </div>
-      </nav>
+      {/* Global Navbar */}
+      <Navbar currentView={view} onViewChange={setView} />
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-hidden relative">
+      <div className="flex-1 overflow-hidden relative">
         {renderContent()}
-      </main>
+      </div>
     </div>
   );
 }
-
-const NavButton = ({ active, onClick, icon, label }) => (
-  <button
-    onClick={onClick}
-    className={clsx(
-      "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
-      active
-        ? "bg-slate-700 text-white shadow-sm"
-        : "text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-    )}
-  >
-    {icon}
-    <span>{label}</span>
-  </button>
-);
 
 export default App;

@@ -38,10 +38,10 @@ const LearningSession = ({ sessionId, onBack, onStartLearning }) => {
     const { session, plan } = sessionData;
 
     return (
-        <div className="flex h-full w-full bg-slate-950 overflow-hidden font-sans">
+        <div className="flex flex-col lg:flex-row h-full w-full bg-slate-950 overflow-hidden font-sans">
             {/* Sidebar: Curriculum Navigator */}
-            <div className="w-80 flex-shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col h-full z-10">
-                <div className="p-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
+            <div className="w-full lg:w-80 flex-shrink-0 bg-slate-900 border-b lg:border-b-0 lg:border-r border-slate-800 flex flex-col h-auto lg:h-full z-10 max-h-[300px] lg:max-h-full overflow-hidden">
+                <div className="p-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur shrink-0">
                     <button onClick={onBack} className="text-xs text-slate-400 hover:text-white mb-4 uppercase tracking-wider font-bold flex items-center gap-2 group transition-colors">
                         <ArrowLeft size={14} className="group-hover:-translate-x-1 transition-transform" />
                         Back to Dashboard
@@ -98,7 +98,7 @@ const LearningSession = ({ sessionId, onBack, onStartLearning }) => {
             {/* Main Area: Learning Content */}
             <div className="flex-1 flex flex-col h-full bg-slate-950 relative overflow-hidden">
                 {/* Top Bar */}
-                <div className="h-16 px-8 flex items-center justify-between bg-slate-900/80 backdrop-blur border-b border-slate-800 z-10">
+                <div className="h-auto py-4 lg:h-16 px-4 lg:px-8 flex flex-col lg:flex-row items-start lg:items-center justify-between bg-slate-900/80 backdrop-blur border-b border-slate-800 z-10 gap-4">
                     <div>
                         <div className="flex items-center gap-2 text-xs text-indigo-400 uppercase tracking-widest font-bold mb-1">
                             <BookOpen size={12} />
@@ -109,15 +109,15 @@ const LearningSession = ({ sessionId, onBack, onStartLearning }) => {
                         </h1>
                     </div>
 
-                    <div className="flex gap-3">
+                    <div className="flex gap-3 w-full lg:w-auto">
                         <button
                             onClick={() => onStartLearning && onStartLearning(activeTopic)}
-                            className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 hover:scale-105 transition-all flex items-center gap-2"
+                            className="flex-1 lg:flex-none justify-center px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 hover:scale-105 transition-all flex items-center gap-2"
                         >
                             <BookOpen size={16} />
                             <span>Start Learning</span>
                         </button>
-                        <button className="px-4 py-2 bg-slate-800 border border-slate-700 text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-700 hover:text-white transition-all flex items-center gap-2">
+                        <button className="flex-1 lg:flex-none justify-center px-4 py-2 bg-slate-800 border border-slate-700 text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-700 hover:text-white transition-all flex items-center gap-2">
                             <CheckCircle size={16} />
                             <span>Mark Complete</span>
                         </button>
@@ -125,23 +125,23 @@ const LearningSession = ({ sessionId, onBack, onStartLearning }) => {
                 </div>
 
                 {/* Content Scroll Area */}
-                <div className="flex-1 overflow-y-auto p-8 max-w-5xl mx-auto w-full">
+                <div className="flex-1 overflow-y-auto p-4 lg:p-8 max-w-5xl mx-auto w-full">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeTopic ? activeTopic.title : 'empty'}
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -10 }}
-                            className="bg-slate-900/40 rounded-3xl border border-slate-800 p-12 min-h-[60vh] flex flex-col items-center justify-center text-center relative overflow-hidden"
+                            className="bg-slate-900/40 rounded-3xl border border-slate-800 p-6 lg:p-12 min-h-[50vh] flex flex-col items-center justify-center text-center relative overflow-hidden"
                         >
                             <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 pointer-events-none" />
 
                             {activeTopic ? (
-                                <div className="relative z-10 max-w-2xl">
+                                <div className="relative z-10 max-w-2xl w-full">
                                     <div className="mb-8 p-6 bg-slate-800 rounded-full w-24 h-24 flex items-center justify-center text-indigo-400 mx-auto shadow-xl shadow-black/20 ring-1 ring-white/10">
                                         <Book size={40} />
                                     </div>
-                                    <h2 className="text-3xl font-bold text-white mb-6 leading-tight">{activeTopic.title}</h2>
+                                    <h2 className="text-2xl lg:text-3xl font-bold text-white mb-6 leading-tight">{activeTopic.title}</h2>
 
                                     <div className="bg-slate-800/60 rounded-xl p-6 mb-8 border border-white/5 backdrop-blur-sm text-left">
                                         <h4 className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
@@ -173,7 +173,7 @@ const LearningSession = ({ sessionId, onBack, onStartLearning }) => {
                             ) : (
                                 <div className="text-slate-500 flex flex-col items-center">
                                     <ChevronRight size={48} className="opacity-20 mb-4" />
-                                    <p>Select a module from the left to begin learning.</p>
+                                    <p>Select a module from the list to begin learning.</p>
                                 </div>
                             )}
                         </motion.div>

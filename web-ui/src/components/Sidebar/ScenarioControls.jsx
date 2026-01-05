@@ -28,11 +28,18 @@ const ScenarioCard = ({ title, desc, icon, active, onClick, colorClass }) => (
     </button>
 );
 
-const ScenarioControls = ({ onRun, isRunning, outcome, topicContext }) => {
+const ScenarioControls = ({ onRun, isRunning, outcome, topicContext, isDemoMode, demoPersona }) => {
     const [scenario, setScenario] = React.useState('confused');
 
     return (
-        <div className="w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col z-20 shadow-2xl">
+        <div className="w-80 h-full bg-slate-900 border-r border-slate-800 flex flex-col z-20 shadow-2xl relative">
+            {/* Demo Mode Overlay Banner */}
+            {isDemoMode && (
+                <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold uppercase tracking-widest text-center py-1.5 shadow-md z-50">
+                    ⚠️ Demo Mode: Auto-Pilot Active
+                </div>
+            )}
+
             {/* Header */}
             <div className="p-5 border-b border-slate-800 bg-slate-900/50 backdrop-blur">
                 <div className="flex items-center gap-2 text-indigo-400 mb-1">
@@ -56,7 +63,7 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext }) => {
                 </div>
 
                 {/* Scenario Selection */}
-                <section>
+                <section className={isDemoMode ? 'opacity-50 pointer-events-none grayscale' : ''}>
                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 block flex items-center gap-2">
                         <User size={12} /> Select Student Persona
                     </label>
@@ -82,19 +89,19 @@ const ScenarioControls = ({ onRun, isRunning, outcome, topicContext }) => {
 
                 {/* Run Button */}
                 <button
-                    onClick={() => onRun("confused")} // Default to confused logic for demo
-                    disabled={isRunning}
+                    onClick={() => onRun(isDemoMode && demoPersona ? demoPersona.state : "confused")}
+                    disabled={isRunning || isDemoMode}
                     className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
                 >
                     {isRunning ? (
                         <>
                             <Loader2 className="animate-spin" size={20} />
-                            <span>Thinking...</span>
+                            <span>{isDemoMode ? "Auto-Reasoning..." : "Thinking..."}</span>
                         </>
                     ) : (
                         <>
                             <Play size={20} className="fill-white" />
-                            <span>Run Strategy Simulation</span>
+                            <span>{isDemoMode ? "Simulating Strategy..." : "Run Strategy Simulation"}</span>
                         </>
                     )}
                 </button>

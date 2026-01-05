@@ -41,7 +41,7 @@ const GoalDecomposition = ({ onBack, onStart }) => {
                     </p>
                 </div>
 
-                {/* Input Section */}
+                {/* Context Input */}
                 <div className="bg-slate-900/50 backdrop-blur-md p-1 rounded-2xl shadow-2xl border border-slate-700/50 mb-12 relative overflow-hidden group">
                     <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
 
@@ -72,164 +72,118 @@ const GoalDecomposition = ({ onBack, onStart }) => {
                             )}
                         </button>
                     </div>
+
+                    {/* Results Section */}
+                    {result && (
+                        <div className="p-4 md:p-6 animate-fade-in-up">
+                            {/* Header Row */}
+                            <div className="flex flex-col md:flex-row items-center justify-between mb-6 gap-4">
+                                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                    <BookOpen size={24} className="text-indigo-400" />
+                                    Recommended Curriculum
+                                </h3>
+                                <span className="text-xs font-mono font-bold text-slate-400 px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 uppercase tracking-wider">
+                                    {result.toc.length} Modules
+                                </span>
+                            </div>
+
+                            {/* Main Card */}
+                            <div className="bg-slate-950/50 rounded-3xl border border-slate-800/50 overflow-hidden relative">
+                                {/* Confidence Visualization (Center) */}
+                                <div className="py-12 md:py-16 flex flex-col items-center justify-center relative">
+                                    <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/5 to-transparent opacity-50" />
+
+                                    <div className="relative z-10 w-32 h-32 md:w-40 md:h-40 rounded-full bg-slate-900 border-4 border-slate-800 flex flex-col items-center justify-center shadow-2xl shadow-indigo-900/20 mb-4">
+                                        <div className="absolute inset-0 rounded-full border-4 border-indigo-500 border-t-transparent bg-transparent rotate-45" style={{ opacity: result.outlineConfidence }} />
+                                        <BrainCircuit className="text-indigo-400 mb-1" size={32} />
+                                        <span className="text-3xl md:text-4xl font-extrabold text-white">{(result.outlineConfidence * 100).toFixed(0)}%</span>
+                                    </div>
+                                    <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Plan Confidence</p>
+                                </div>
+
+                                {/* Start Button (Bottom Full Width) */}
+                                {result.showStartButton && (
+                                    <div className="p-4 bg-slate-900/50 border-t border-slate-800">
+                                        <button
+                                            onClick={async () => {
+                                                setSaving(true);
+                                                try {
+                                                    const { saveLearningPlan, createSession } = await import('../services/api');
+                                                    const saved = await saveLearningPlan(result);
+                                                    const session = await createSession(saved.plan_id, "student_001");
+                                                    onStart(session.session_id);
+                                                } catch (e) {
+                                                    const msg = e.response?.data?.detail || "Failed to start session!";
+                                                    alert(`Error: ${msg}`);
+                                                    setSaving(false);
+                                                }
+                                            }}
+                                            disabled={saving}
+                                            className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-wait group text-lg"
+                                        >
+                                            {saving ? 'Initializing Curriculum...' : 'Start Learning Path'}
+                                            {!saving && <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
                     {error && (
-                        <div className="px-4 pb-3 text-red-400 text-sm flex items-center gap-2">
+                        <div className="px-6 pb-6 text-red-400 text-sm flex items-center gap-2">
                             <AlertCircle size={14} />
                             {error}
                         </div>
                     )}
                 </div>
 
-                {/* Results Area */}
+                {/* Modules List (Below Main Card) */}
                 <AnimatePresence mode="wait">
                     {result && (
                         <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -20 }}
-                            className="space-y-8"
+                            className="space-y-4"
                         >
-                            {/* Status Cards */}
-                            {result.status === "NO_COVERAGE" ? (
-                                <div className="p-8 bg-amber-900/20 border border-amber-500/30 rounded-2xl text-center backdrop-blur-sm">
-                                    <div className="w-16 h-16 bg-amber-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                                        <AlertTriangle className="text-amber-500" size={32} />
-                                    </div>
-                                    <h3 className="text-xl font-bold text-amber-200 mb-2">No Content Found</h3>
-                                    <p className="text-amber-400/80">We couldn't find any relevant learning materials in the Knowledge Base for "{result.goal}".</p>
-                                </div>
-                            ) : (
-                                <>
-                                    {/* Metrics & Action Bar */}
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 backdrop-blur-sm flex items-center gap-4">
-                                            <div className="p-3 bg-indigo-500/20 rounded-lg">
-                                                <BookOpen className="text-indigo-400" size={24} />
-                                            </div>
-                                            <div>
-                                                <div className="text-2xl font-bold text-white">{(result.evidenceCoverage * 100).toFixed(0)}%</div>
-                                                <div className="text-xs text-slate-400 uppercase tracking-wider font-bold">Content Coverage</div>
-                                            </div>
-                                        </div>
+                            <div className="text-center py-4 opacity-50">
+                                <ChevronRight className="mx-auto rotate-90" />
+                            </div>
 
-                                        <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-5 backdrop-blur-sm flex items-center gap-4">
-                                            <div className="p-3 bg-emerald-500/20 rounded-lg">
-                                                <Zap className="text-emerald-400" size={24} />
-                                            </div>
-                                            <div>
-                                                <div className="text-2xl font-bold text-white">{(result.outlineConfidence * 100).toFixed(0)}%</div>
-                                                <div className="text-xs text-slate-400 uppercase tracking-wider font-bold">Plan Confidence</div>
-                                            </div>
-                                        </div>
-
-                                        {result.showStartButton && (
-                                            <button
-                                                onClick={async () => {
-                                                    setSaving(true);
-                                                    try {
-                                                        const { saveLearningPlan, createSession } = await import('../services/api');
-                                                        const saved = await saveLearningPlan(result);
-                                                        const session = await createSession(saved.plan_id, "student_001");
-                                                        onStart(session.session_id);
-                                                    } catch (e) {
-                                                        const msg = e.response?.data?.detail || "Failed to start session!";
-                                                        alert(`Error: ${msg}`);
-                                                        setSaving(false);
-                                                    }
-                                                }}
-                                                disabled={saving}
-                                                className="bg-emerald-600 hover:bg-emerald-500 text-white p-5 rounded-xl font-bold shadow-lg shadow-emerald-900/20 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-wait"
-                                            >
-                                                {saving ? 'Initializing...' : 'Start Learning Path'}
-                                                {!saving && <ChevronRight size={20} />}
-                                            </button>
-                                        )}
-                                    </div>
-
-                                    {/* Generated Title Display */}
-                                    <div className="text-center py-4">
-                                        <span className="text-xs bg-slate-800 text-slate-400 px-3 py-1 rounded-full border border-slate-700">
-                                            Generated Curriclum: <span className="text-slate-200 font-bold">{result.generatedTitle || goal}</span>
+                            {result.toc.map((node, idx) => (
+                                <motion.div
+                                    key={idx}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: idx * 0.1 }}
+                                    className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 hover:bg-slate-900/60 transition-colors flex flex-col md:flex-row md:items-start gap-6 group"
+                                >
+                                    {/* Module Badge (Fixed Width/Height) */}
+                                    <div className="shrink-0">
+                                        <span className="inline-block px-3 py-1.5 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-xs font-bold uppercase tracking-wider min-w-[100px] text-center whitespace-nowrap group-hover:bg-indigo-500/20 transition-colors">
+                                            Module {idx + 1}
                                         </span>
                                     </div>
 
-                                    {/* Curriculum Structure */}
-                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                        <div className="lg:col-span-2 space-y-4">
-                                            <h2 className="text-slate-300 font-bold text-sm uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                <Layers size={16} /> Course Structure
-                                            </h2>
-
-                                            {result.toc.map((node, idx) => (
-                                                <motion.div
-                                                    key={idx}
-                                                    initial={{ opacity: 0, x: -10 }}
-                                                    animate={{ opacity: 1, x: 0 }}
-                                                    transition={{ delay: idx * 0.1 }}
-                                                    className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-6 hover:bg-slate-800/60 transition-colors"
-                                                >
-                                                    <div className="flex items-start justify-between mb-4">
-                                                        <div>
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <span className="text-xs font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">MODULE {idx + 1}</span>
-                                                                <h3 className="font-bold text-lg text-slate-100">{node.title}</h3>
-                                                            </div>
-                                                        </div>
-                                                        <span className="text-xs text-slate-500 font-mono">{node.children?.length || 0} Topics</span>
-                                                    </div>
-
-                                                    <ul className="space-y-2">
-                                                        {node.children.map((child, i) => (
-                                                            <li key={i} className="flex items-start gap-3 group">
-                                                                <CheckCircle className="text-slate-600 group-hover:text-emerald-500 transition-colors mt-0.5 shrink-0" size={16} />
-                                                                <span className="text-slate-400 text-sm group-hover:text-slate-200 transition-colors">{child.title}</span>
-                                                            </li>
-                                                        ))}
-                                                    </ul>
-                                                </motion.div>
+                                    {/* Content */}
+                                    <div className="flex-1">
+                                        <h3 className="text-xl font-bold text-slate-100 mb-3">{node.title}</h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                            {node.children.map((child, i) => (
+                                                <div key={i} className="flex items-start gap-2 text-sm text-slate-400">
+                                                    <CheckCircle size={14} className="mt-1 text-slate-600 shrink-0 group-hover:text-emerald-500/50 transition-colors" />
+                                                    <span>{child.title}</span>
+                                                </div>
                                             ))}
                                         </div>
-
-                                        {/* Gaps Panel */}
-                                        <div>
-                                            <h2 className="text-slate-300 font-bold text-sm uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                <AlertCircle size={16} /> Knowledge Gaps
-                                            </h2>
-
-                                            <div className="bg-slate-800/30 border border-slate-700/50 rounded-xl p-5 space-y-4">
-                                                {result.gaps.length === 0 ? (
-                                                    <div className="text-center py-8 text-emerald-400">
-                                                        <CheckCircle size={32} className="mx-auto mb-2 opacity-50" />
-                                                        <p className="text-sm">Complete Coverage</p>
-                                                    </div>
-                                                ) : (
-                                                    result.gaps.map((gap, i) => (
-                                                        <div key={i} className="flex gap-3 text-sm p-3 rounded-lg bg-slate-900/30 border border-slate-800">
-                                                            <div className="mt-0.5">
-                                                                <div className="w-1.5 h-1.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-                                                            </div>
-                                                            <div>
-                                                                <div className="font-bold text-slate-200">{gap.title}</div>
-                                                                <div className="text-xs text-red-400 mt-1">{gap.gapType.replace("_", " ")}</div>
-                                                                <p className="text-xs text-slate-500 mt-1">{gap.reason}</p>
-                                                            </div>
-                                                        </div>
-                                                    ))
-                                                )}
-                                            </div>
-
-                                            <div className="mt-6 bg-indigo-900/20 border border-indigo-500/20 p-4 rounded-xl">
-                                                <h4 className="text-indigo-300 font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                                                    <BrainCircuit size={14} /> AI Analysis
-                                                </h4>
-                                                <p className="text-xs text-indigo-200/60 leading-relaxed">
-                                                    Structure inferred via semantic clustering of {result.toc.reduce((acc, n) => acc + n.children.length, 0)} retrieved knowledge chunks.
-                                                </p>
-                                            </div>
-                                        </div>
                                     </div>
-                                </>
-                            )}
+
+                                    {/* Stats */}
+                                    <div className="shrink-0 text-right hidden md:block">
+                                        <span className="text-2xl font-bold text-slate-700 block">{String(idx + 1).padStart(2, '0')}</span>
+                                    </div>
+                                </motion.div>
+                            ))}
                         </motion.div>
                     )}
                 </AnimatePresence>
@@ -237,5 +191,6 @@ const GoalDecomposition = ({ onBack, onStart }) => {
         </div>
     );
 };
+
 
 export default GoalDecomposition;

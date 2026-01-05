@@ -16,10 +16,17 @@ const STRATEGY_LABELS = {
     "motivational_encouragement": { label: "Encouragement", icon: "🌟" },
 };
 
-const StudentProfilePanel = ({ profile, tieTrace }) => {
-    if (!profile) return null;
+const StudentProfilePanel = ({ profile, tieTrace, isDemoMode, demoPersona }) => {
+    // If we have a demo persona but no backend profile yet (loading state), visualize the Persona first
+    const activeProfile = profile || (demoPersona ? {
+        name: "Simulated Student",
+        mastery_level: "Assessing...",
+        learning_preferences: {}
+    } : null);
 
-    const preferences = profile.learning_preferences || {};
+    if (!activeProfile) return null;
+
+    const preferences = activeProfile.learning_preferences || {};
 
     // Convert to array and sort by confidence
     const sortedPrefs = Object.entries(preferences)
@@ -32,19 +39,39 @@ const StudentProfilePanel = ({ profile, tieTrace }) => {
         .slice(0, 5); // Top 5
 
     return (
-        <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-700/50 overflow-hidden flex flex-col h-full ring-1 ring-white/10">
+        <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-700/50 overflow-hidden flex flex-col h-full ring-1 ring-white/10 relative">
+
+            {/* Demo Mode Banner */}
+            {isDemoMode && demoPersona && (
+                <div className="bg-indigo-500 text-white text-[10px] font-bold uppercase tracking-widest text-center py-1">
+                    Demo Perspective: {demoPersona.type}
+                </div>
+            )}
+
             <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 text-white relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-10">
                     <User size={64} />
                 </div>
+
+                {/* Demo Persona Chips */}
+                {isDemoMode && demoPersona && (
+                    <div className="mb-3 flex flex-wrap gap-1">
+                        {demoPersona.traits.map((trait, i) => (
+                            <span key={i} className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded border border-white/10 backdrop-blur-md">
+                                {trait}
+                            </span>
+                        ))}
+                    </div>
+                )}
+
                 <h3 className="text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1 flex items-center gap-1">
-                    <Zap size={10} /> Active Student Model
+                    <Zap size={10} /> {isDemoMode ? `Simulated: ${demoPersona?.name}` : "Active Student Model"}
                 </h3>
                 <div className="flex justify-between items-end relative z-10">
-                    <h2 className="text-xl font-bold tracking-tight">{profile.name}</h2>
+                    <h2 className="text-xl font-bold tracking-tight">{activeProfile.name}</h2>
                     <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full backdrop-blur-sm font-bold border border-white/10 flex items-center gap-1">
                         <Medal size={10} />
-                        Level: {profile.mastery_level}
+                        Level: {activeProfile.mastery_level}
                     </span>
                 </div>
             </div>
@@ -116,7 +143,7 @@ const StudentProfilePanel = ({ profile, tieTrace }) => {
             </div>
 
             <div className="bg-slate-800/50 p-3 border-t border-slate-700/50 text-center text-[10px] text-slate-500 font-mono">
-                LAST OPTIMIZED: {profile.last_updated ? new Date(profile.last_updated).toLocaleTimeString() : "Just now"}
+                LAST OPTIMIZED: {activeProfile.last_updated ? new Date(activeProfile.last_updated).toLocaleTimeString() : "Just now"}
             </div>
         </div>
     );
