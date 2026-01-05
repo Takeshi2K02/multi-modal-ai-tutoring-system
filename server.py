@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +8,7 @@ import os
 from agent_core.graph import create_tot_graph
 from agent_core.schemas import AgentState, ThoughtNode
 from services.decomposition_service import decompose_goal
+from services.ingestion_service import ingest_pdf
 
 app = FastAPI()
 
@@ -19,6 +20,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    print(">>> Agentic AI Core Starting...")
+    print(f">>> VectorDB Provider: Local (ChromaDB at {os.getcwd()}/local_data)")
+    print(">>> Mock VectorDB has been disabled.")
 
 class ScenarioRequest(BaseModel):
     scenario: str # "confused" | "bored"
@@ -147,6 +154,24 @@ async def goal_decompose(req: DecomposeRequest):
     except Exception as e:
         print(f"Decomposition Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """
+    Ingests a PDF file into the Local VectorDB.
+    """
+    print(f"Received upload: {file.filename}")
+    try:
+        if not file.filename.endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+            
+        content = await file.read()
+        result = await ingest_pdf(content, file.filename)
+        return result
+    except Exception as e:
+        print(f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 def health_check():

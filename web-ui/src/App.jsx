@@ -4,6 +4,7 @@ import TreeVisualizer from './components/Graph/TreeVisualizer';
 import SignalsPanel from './components/Graph/SignalsPanel';
 import StudentProfilePanel from './components/StudentProfilePanel';
 import GoalDecomposition from './pages/GoalDecomposition';
+import LectureUpload from './pages/LectureUpload';
 import TOC from './pages/TableOfContents';
 import { runSimulation } from './services/api';
 
@@ -56,6 +57,11 @@ function App() {
     );
   }
 
+  // Route: Lecture Upload
+  if (view === 'upload') {
+    return <LectureUpload onBack={() => setView('visualizer')} />;
+  }
+
   // Route: Main Visualizer
   return (
     <div className="flex h-screen w-screen bg-slate-50 overflow-hidden font-sans text-slate-900">
@@ -68,12 +74,21 @@ function App() {
       />
 
       {/* Absolute Nav Button for Decomposition Demo */}
-      <button
-        onClick={() => setView('decomposition')}
-        className="absolute top-6 left-[380px] z-50 px-4 py-2 bg-white border border-slate-300 shadow-sm rounded-lg text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
-      >
-        To Goal Decomposition →
-      </button>
+      <div className="absolute top-6 left-[380px] z-50 flex gap-2">
+        <button
+          onClick={() => setView('decomposition')}
+          className="px-4 py-2 bg-white border border-slate-300 shadow-sm rounded-lg text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+        >
+          To Goal Decomposition →
+        </button>
+
+        <button
+          onClick={() => setView('upload')}
+          className="px-4 py-2 bg-white border border-slate-300 shadow-sm rounded-lg text-xs font-bold uppercase tracking-wider text-slate-600 hover:bg-slate-50 hover:text-emerald-600 transition-colors"
+        >
+          📂 Upload Lectures
+        </button>
+      </div>
 
       {/* Main Graph Area */}
       <div className="flex-1 relative h-full dots-pattern">
