@@ -11,10 +11,14 @@ import LearningSession from './pages/LearningSession';
 import SessionDashboard from './pages/SessionDashboard';
 import Navbar from './components/Navbar';
 
+import ContentGeneration from './pages/ContentGeneration'; // New Import
+
 function App() {
   const [view, setView] = useState('decomposition'); // Default: 'decomposition'
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [currentTopicContext, setCurrentTopicContext] = useState(null);
+  const [contentGenRequest, setContentGenRequest] = useState(null); // New State
+  const [countdown, setCountdown] = useState(0); // New State
 
   // Dynamic Title
   useEffect(() => {
@@ -23,7 +27,8 @@ function App() {
       session: 'EduSynth - Learning',
       dashboard: 'EduSynth - My Learning',
       agent: 'EduSynth - Agent View',
-      upload: 'EduSynth - Upload'
+      upload: 'EduSynth - Upload',
+      'content-generation': 'EduSynth - Content Gen' // New Title
     };
     document.title = titles[view] || 'EduSynth AI Tutor';
   }, [view]);
@@ -81,6 +86,8 @@ function App() {
       setShowProfile(true);
       setShowCV(false);
       setShowRL(false);
+      setCountdown(0);
+      setContentGenRequest(null);
 
       // 1. Select Random Persona (Single Source of Truth)
       const randomPersona = MOCK_PERSONAS[Math.floor(Math.random() * MOCK_PERSONAS.length)];
@@ -104,6 +111,7 @@ function App() {
     setError(null);
     setGraphData(null);
     setOutcome(null);
+    setCountdown(0);
 
     try {
       const { runSimulation } = await import('./services/api');
@@ -111,6 +119,7 @@ function App() {
       const result = await runSimulation(scenario, currentTopicContext);
       setGraphData(result);
       setOutcome(result);
+      // NOTE: Simulation complete, but we wait for VISUAL playback to finish before countdown.
     } catch (err) {
       console.error(err);
       const msg = err.response?.data?.detail || err.message || "Failed to connect to Agent backend.";
@@ -119,6 +128,60 @@ function App() {
       setLoading(false);
     }
   };
+
+  const handleSimulationComplete = () => {
+    // Triggered by TreeVisualizer onAnimationComplete
+    if (countdown > 0) return; // Already counting down
+
+    // Construct Payload
+    if (!outcome || !demoPersona) return;
+
+    // Simulate deriving spec from outcome (assuming outcome format from backend)
+    // We map the tree outcome to the requested JSON structure
+    const requestPayload = {
+      topic: currentTopicContext || { title: "Introduction to Calculus", id: "calc_101" }, // Fallback if context missing
+      studentPersona: {
+        id: demoPersona.id,
+        name: demoPersona.name,
+        traits: demoPersona.traits
+      },
+      selectedStrategy: {
+        pathId: outcome.meta?.best_path_id || "path_optimal",
+        pathTitle: outcome.meta?.strategy_name || "Adaptive Scaffolding",
+        techniques: outcome.meta?.techniques || ["Metaphor", "Step-by-Step"],
+        tone: outcome.meta?.tone || "Encouraging",
+        format: "Interactive Module",
+        stepPlan: ["Intro", "Concept", "Practice"]
+      },
+      difficultySignal: {
+        reason: demoPersona.state,
+        evidence: {
+          cvInput: demoPersona.cv_data,
+          rlInput: demoPersona.rl_data
+        }
+      },
+      outputSpec: {
+        sections: ["Explanation", "Worked Example", "Quick Check", "Summary"],
+        length: "medium",
+        style: demoPersona.type === 'Visual' ? 'interactive' : 'direct'
+      }
+    };
+
+    setContentGenRequest(requestPayload);
+    setCountdown(10); // Start 10s countdown
+  };
+
+  // Countdown Effect
+  useEffect(() => {
+    if (countdown > 0) {
+      const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
+      return () => clearTimeout(timer);
+    } else if (countdown === 0 && contentGenRequest && view === 'agent') {
+      // Countdown finished, navigate!
+      setView('content-generation');
+    }
+  }, [countdown, contentGenRequest, view]);
+
 
   // --- Views ---
 
@@ -162,6 +225,19 @@ function App() {
       case 'upload':
         return <LectureUpload onBack={() => setView('decomposition')} />;
 
+      case 'content-generation': // New View
+        return (
+          <ContentGeneration
+            request={contentGenRequest}
+            onBack={() => setView('agent')}
+            onStartLearning={() => {
+              // Start a new session or go to dashboard
+              // For demo, loop back to dashboard or session
+              setView('dashboard');
+            }}
+          />
+        );
+
       case 'agent':
         return (
           <div className="flex h-full w-full relative overflow-hidden bg-slate-950">
@@ -192,7 +268,15 @@ function App() {
 
             {/* CENTER GRAPH (Flexible) */}
             <div className="flex-1 relative h-full dots-pattern bg-slate-950 z-10 transition-all duration-300">
-              <TreeVisualizer data={graphData} />
+              <TreeVisualizer
+                data={graphData}
+                onAnimationComplete={() => {
+                  // Only trigger if we have an outcome and aren't already generating
+                  if (graphData && !contentGenRequest) {
+                    handleSimulationComplete();
+                  }
+                }}
+              />
 
               {!graphData && !loading && !error && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -203,6 +287,22 @@ function App() {
                       <br />
                       <span className="text-base">Waiting for simulation...</span>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Status Overlay & Countdown */}
+              {countdown > 0 && (
+                <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-indigo-900/90 text-white backdrop-blur-md px-6 py-3 rounded-full shadow-2xl border border-indigo-500/50 flex items-center gap-4 z-50 animate-in fade-in slide-in-from-top-4">
+                  <div className="relative w-5 h-5">
+                    <svg className="w-full h-full -rotate-90">
+                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-900" />
+                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="50" strokeDashoffset={50 - (50 * countdown) / 10} className="text-emerald-400 transition-all duration-1000 ease-linear" />
+                    </svg>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-300">Simulation Complete</span>
+                    <span className="text-sm font-medium">Preparing learning content... {countdown}s</span>
                   </div>
                 </div>
               )}

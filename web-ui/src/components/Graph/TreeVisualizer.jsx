@@ -62,7 +62,7 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
 };
 
 
-const TreeVisualizer = ({ data }) => {
+const TreeVisualizer = ({ data, onAnimationComplete }) => {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const { fitView } = useReactFlow();
@@ -110,6 +110,13 @@ const TreeVisualizer = ({ data }) => {
 
         return () => clearInterval(interval);
     }, [fullLayout, isPybackComplete]);
+
+    // Trigger completion callback
+    React.useEffect(() => {
+        if (isPybackComplete && onAnimationComplete) {
+            onAnimationComplete();
+        }
+    }, [isPybackComplete, onAnimationComplete]);
 
     // 3. Render Visible Graph based on Index
     React.useEffect(() => {
