@@ -4,6 +4,9 @@ from db.connection import get_db_connection
 from bson.objectid import ObjectId
 
 class LearningPlanService:
+    # In-memory Mock Store for Demo Mode
+    MOCK_DB = {}
+
     def __init__(self):
         self.db = get_db_connection()
         self.collection = self.db.get_collection("learning_plans") if self.db is not None else None
@@ -13,9 +16,6 @@ class LearningPlanService:
         Validates and saves a learning plan.
         Returns the Inserted ID as a string.
         """
-        if self.collection is None:
-            raise Exception("Database unavailable")
-
         # 1. Sanitize & Structure
         # Ensure we have required metadata
         plan_doc = {
@@ -45,9 +45,16 @@ class LearningPlanService:
             }
         }
 
-        # 2. Insert
-        result = self.collection.insert_one(plan_doc)
-        return str(result.inserted_id)
+        # 2. Insert (Real or Mock)
+        if self.collection is not None:
+            result = self.collection.insert_one(plan_doc)
+            return str(result.inserted_id)
+        else:
+            print(">>> Using Mock DB for Learning Plan")
+            mock_id = str(ObjectId())
+            plan_doc["_id"] = mock_id # Store ID as string for consistency in mock
+            LearningPlanService.MOCK_DB[mock_id] = plan_doc
+            return mock_id
 
     def _sanitize_structure(self, raw_toc: list) -> list:
         """
@@ -71,19 +78,7 @@ class LearningPlanService:
                 
                 # Extract refs from 'topChunks' but DROP the text
                 ev = topic.get("evidence", {})
-                chunks = ev.get("topChunks", [])
-                
-                # Also assume 'sourceDocs' gives us page numbers if parsed correctly
-                # But chunks usually have source metadata if we added it.
-                # In current decomposition_service, chunk['metadata'] was lost in aggregation 
-                # unless we pushed it into evidence.
-                # Re-checking decomposition logic: 
-                # evidence_top_chunks.append({"text": ..., "score": ...})
-                # It didn't store metadata in 'topChunks'.
-                # However, 'sourceDocs' has strings like "Page 5"
-                
                 clean_topic["evidence_source_summary"] = ev.get("sourceDocs", [])
-                # We won't store raw text in DB plan.
                 
                 clean_lec["children"].append(clean_topic)
             
@@ -91,12 +86,18 @@ class LearningPlanService:
         return clean_toc
 
     def get_plan(self, plan_id: str) -> Optional[Dict[str, Any]]:
-        if self.collection is None: 
-            return None
-        try:
-            doc = self.collection.find_one({"_id": ObjectId(plan_id)})
+        if self.collection is not None:
+             try:
+                doc = self.collection.find_one({"_id": ObjectId(plan_id)})
+                if doc:
+                    doc["_id"] = str(doc["_id"])
+                return doc
+             except Exception:
+                return None
+        else:
+            # Mock Retrieval
+            doc = LearningPlanService.MOCK_DB.get(plan_id)
             if doc:
-                doc["_id"] = str(doc["_id"])
-            return doc
-        except Exception:
+                # Return deep copy if needed, but dict is fine for read
+                return doc
             return None
