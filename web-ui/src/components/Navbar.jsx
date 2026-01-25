@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { BrainCircuit, Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap } from 'lucide-react';
+import { BrainCircuit, Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap, Upload } from 'lucide-react';
 
 const Navbar = ({ onViewChange, currentView }) => {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     const navItems = [
         { id: 'decomposition', label: 'New Goal', icon: <Layers size={18} /> },
+        { id: 'upload', label: 'Upload', icon: <Upload size={18} /> },
         { id: 'dashboard', label: 'My Learning', icon: <LayoutDashboard size={18} /> },
         { id: 'agent', label: 'Agent Debugger', icon: <BrainCircuit size={18} /> },
     ];
