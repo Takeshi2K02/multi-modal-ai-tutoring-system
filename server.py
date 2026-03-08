@@ -579,6 +579,9 @@ class CVTelemetryRequest(BaseModel):
     user_id: str
     engagement_score: float
     emotion: str
+    gaze: Optional[str] = "unknown"
+    posture: Optional[str] = "unknown"
+    engagement_state: Optional[str] = "unknown"
     metadata: Optional[Dict] = None
 
 class CVTrackRequest(BaseModel):
@@ -608,7 +611,15 @@ async def track_engagement_direct(req: CVTrackRequest):
         result = process_engagement_data(req.frame, material_id=req.material_id)
         
         # Persist and Emit (push_cv_data handles socket emission now)
-        await push_cv_data(req.user_id, result['engagement_score'], result['emotion'], result)
+        await push_cv_data(
+            req.user_id, 
+            result['engagement_score'], 
+            result['emotion'],
+            gaze=result.get('gaze', 'unknown'),
+            posture=result.get('posture', 'unknown'),
+            engagement_state=result.get('engagement_state', 'unknown'),
+            metadata=result
+        )
         
         return result
     except Exception as e:
@@ -621,7 +632,15 @@ async def track_engagement_direct(req: CVTrackRequest):
 async def receive_cv_telemetry(req: CVTelemetryRequest):
     print(f">>> CV Telemetry Received: User={req.user_id}, Score={req.engagement_score}, Emotion={req.emotion}")
     from integration.persistence import push_cv_data
-    await push_cv_data(req.user_id, req.engagement_score, req.emotion, req.metadata)
+    await push_cv_data(
+        req.user_id, 
+        req.engagement_score, 
+        req.emotion, 
+        gaze=req.gaze, 
+        posture=req.posture, 
+        engagement_state=req.engagement_state, 
+        metadata=req.metadata
+    )
     return {"status": "telemetry_logged"}
 
 @fastapi_app.post("/api/telemetry/rl")

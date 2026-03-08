@@ -30,10 +30,13 @@ const AdminMonitor = () => {
     // 1. WebSocket Listeners (Aligned with persistence.py)
     useEffect(() => {
         socket.on('cv_update', (data) => {
-            setCvData((prev) => [...prev.slice(-20), {
+            setCvData((prev) => [...prev.slice(-80), {
                 time: new Date(data.timestamp).toLocaleTimeString(),
                 score: data.engagement_score,
-                emotion: data.emotion
+                emotion: data.emotion,
+                gaze: data.gaze,
+                posture: data.posture,
+                state: data.engagement_state
             }]);
             setLogs((prev) => [{ type: 'CV', data }, ...prev.slice(0, 49)]);
         });
@@ -170,15 +173,39 @@ const AdminMonitor = () => {
                                 {/* TELEMETRY DATA - BELOW CAMERA */}
                                 <div className="grid grid-cols-2 w-full gap-4 pt-6 border-t border-edu-border-light dark:border-white/5">
                                     <div className="text-center border-r border-edu-border-light dark:border-white/5">
-                                        <p className="text-[9px] text-zinc-500 dark:text-slate-500 uppercase font-bold tracking-[0.2em] mb-2">Dominant State</p>
+                                        <p className="text-[9px] text-zinc-500 dark:text-slate-500 uppercase font-bold tracking-[0.2em] mb-2">Emotion</p>
                                         <p className="text-3xl font-light text-edu-text-light dark:text-white capitalize tracking-wide">
                                             {cvData[cvData.length - 1]?.emotion || <span className="opacity-20 text-sm italic">Analyzing...</span>}
                                         </p>
                                     </div>
                                     <div className="text-center">
-                                        <p className="text-[9px] text-zinc-500 dark:text-slate-500 uppercase font-bold tracking-[0.2em] mb-2">Cognitive Load</p>
+                                        <p className="text-[9px] text-zinc-500 dark:text-slate-500 uppercase font-bold tracking-[0.2em] mb-2">Confidence</p>
                                         <p className="text-4xl font-mono font-light text-primary">
-                                            {cvData[cvData.length - 1]?.score?.toFixed(2) || '0.00'}
+                                            {cvData[cvData.length - 1]?.score !== undefined ? `${(cvData[cvData.length - 1].score * 100).toFixed(0)}%` : '0%'}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* REFINED: DETAILED METRICS LAYOUT */}
+                                <div className="w-full space-y-4 pt-4 border-t border-edu-border-light dark:border-white/5">
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className="text-center border-r border-edu-border-light dark:border-white/5">
+                                            <p className="text-[8px] text-zinc-400 dark:text-slate-600 uppercase font-bold tracking-widest mb-1">Gaze</p>
+                                            <p className="text-sm text-edu-text-light dark:text-zinc-300 capitalize">
+                                                {cvData[cvData.length - 1]?.gaze || '---'}
+                                            </p>
+                                        </div>
+                                        <div className="text-center">
+                                            <p className="text-[8px] text-zinc-400 dark:text-slate-600 uppercase font-bold tracking-widest mb-1">State</p>
+                                            <p className="text-sm text-edu-text-light dark:text-zinc-300 capitalize truncate">
+                                                {cvData[cvData.length - 1]?.state?.replace('_', ' ') || '---'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="text-center pt-2 border-t border-edu-border-light/30 dark:border-white/5">
+                                        <p className="text-[8px] text-zinc-400 dark:text-slate-600 uppercase font-bold tracking-widest mb-1">Posture</p>
+                                        <p className="text-sm text-edu-text-light dark:text-zinc-300 capitalize">
+                                            {cvData[cvData.length - 1]?.posture?.replace('_', ' ') || '---'}
                                         </p>
                                     </div>
                                 </div>
@@ -317,7 +344,17 @@ const AdminMonitor = () => {
                                         {log.type}
                                     </span>
                                     <span className="text-zinc-400 dark:text-slate-700 shrink-0 font-bold">{new Date().toLocaleTimeString()}</span>
-                                    <span className="text-zinc-600 dark:text-slate-400 group-hover:text-edu-text-light dark:group-hover:text-white break-all font-light leading-relaxed">{JSON.stringify(log.data)}</span>
+                                    <span className="text-zinc-600 dark:text-slate-400 group-hover:text-edu-text-light dark:group-hover:text-white break-all font-light leading-relaxed">
+                                        {log.type === 'CV' ? (
+                                            <span className="text-primary/80">
+                                                Emotion: <span className="text-primary font-bold">{log.data.emotion}</span> |
+                                                Score: <span className="text-primary font-bold">{log.data.engagement_score.toFixed(2)}</span> |
+                                                Gaze: <span className="text-primary font-bold">{log.data.gaze}</span> |
+                                                Posture: <span className="text-primary font-bold">{log.data.posture}</span> |
+                                                State: <span className="text-primary font-bold">{log.data.engagement_state}</span>
+                                            </span>
+                                        ) : JSON.stringify(log.data)}
+                                    </span>
                                 </div>
                             ))}
                         </div>

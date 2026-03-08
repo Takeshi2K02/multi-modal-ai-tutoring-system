@@ -24,7 +24,9 @@ async def _emit_event(event, data):
     except Exception as e:
         print(f"Socket Emit Error: {e}")
 
-async def push_cv_data(user_id: str, engagement_score: float, emotion: str, metadata: dict = None):
+async def push_cv_data(user_id: str, engagement_score: float, emotion: str, 
+                       gaze: str = "unknown", posture: str = "unknown", 
+                       engagement_state: str = "unknown", metadata: dict = None):
     """
     Called by the CV module every 1.5s to log engagement and emotion.
     """
@@ -34,6 +36,9 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str, meta
         "timestamp": datetime.utcnow(),
         "engagement_score": engagement_score,
         "emotion": emotion,
+        "gaze": gaze,
+        "posture": posture,
+        "engagement_state": engagement_state,
         "metadata": metadata or {}
     }
     db.StudentEngagement.insert_one(log_entry)

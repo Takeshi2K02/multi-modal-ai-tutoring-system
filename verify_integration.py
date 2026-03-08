@@ -10,13 +10,13 @@ async def verify_integration():
     print("\n--- Phase 1: Mocking Data Persistence ---")
     # Simulate CV data every 1.5s (we'll just push twice)
     # High score initially
-    push_cv_data(student_id, 0.9, "focused")
+    await push_cv_data(student_id, 0.9, "focused", gaze="forward", posture="upright", engagement_state="engaged")
     # Low score to trigger deviation alert (current < 50% of 0.9)
-    push_cv_data(student_id, 0.2, "frustrated")
+    await push_cv_data(student_id, 0.2, "frustrated", gaze="away", posture="slouched", engagement_state="disengaged")
     
     # Simulate RL strategy
     # Action ID 2 = Provide hint
-    push_rl_strategy(student_id, 2, 0.85, "Student needs scaffolding")
+    await push_rl_strategy(student_id, 2, 0.85, "Student needs scaffolding")
     print("Pushed CV and RL data to MongoDB.")
 
     print("\n--- Phase 2: Resolving Snapshot ---")
