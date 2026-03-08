@@ -1,1 +1,73 @@
+# Virtual Environments
+venv/
+.venv/
+env/
+bin/
+include/
+lib/
+share/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ML Models and Weights
+*.pth
+*.pt
+*.safetensors
+*.task
+*.bin
+*.model
+*.onnx
+*.weights
+*.dylib
+*.so
+*.dll
+checkpoint-*/
+cv/trained_models/
+rl_engine/models/
+
+# Database and Data
 local_data/
+*.db
+*.sqlite3
+
+# Logs and PID files
+*.log
+logs/
+*.pid
+*.seed
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Project specific transients
+edusynth-agent.json
+system_diagnostic_report.txt
+tot_verification_trace.txt
+integration_success_report.txt
+RL_logs/

@@ -6,7 +6,7 @@
 
 @layer base {
   body {
-    @apply font-sans text-slate-50 bg-slate-950 antialiased selection:bg-indigo-500/30;
+    @apply font-sans text-edu-text-light dark:text-edu-text-dark bg-edu-bg-light dark:bg-edu-bg-dark antialiased selection:bg-primary/30;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -15,63 +15,84 @@
 
     /* Global Polish */
     font-size: 16px;
-    /* Base size */
   }
 
   @media (min-width: 768px) {
     :root {
       font-size: 18px;
-      /* Larger text on desktop */
     }
   }
 }
 
-/* --- Custom Utilities --- */
+/* --- Deep Midnight Custom Utilities (ID: 25-26J-130) --- */
 .glass-panel {
-  @apply bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 shadow-2xl shadow-black/20;
+  @apply bg-white/80 dark:bg-[#1E293B]/15 backdrop-blur-3xl border border-[#90E0EF]/10 shadow-xl dark:shadow-none;
+}
+
+.aquatic-shadow {
+  box-shadow: 0 10px 30px -10px #ADE8F4;
 }
 
 .mesh-gradient {
-  background-color: #f3f4f6;
   background-image:
-    radial-gradient(at 0% 0%, hsla(253, 16%, 7%, 1) 0, transparent 50%),
-    radial-gradient(at 50% 0%, hsla(225, 39%, 30%, 1) 0, transparent 50%),
-    radial-gradient(at 100% 0%, hsla(339, 49%, 30%, 1) 0, transparent 50%);
+    radial-gradient(at 0% 0%, rgba(0, 119, 182, 0.1) 0px, transparent 50%),
+    radial-gradient(at 50% 0%, rgba(2, 62, 138, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(0, 119, 182, 0.1) 0px, transparent 50%);
 }
 
-/* --- React Flow Node Styling --- */
+@keyframes gradient-x {
+
+  0%,
+  100% {
+    background-size: 200% 200%;
+    background-position: left center;
+  }
+
+  50% {
+    background-size: 200% 200%;
+    background-position: right center;
+  }
+}
+
+.animate-gradient-x {
+  animation: gradient-x 6s ease infinite;
+}
+
+/* --- React Flow Node Styling (Deep Midnight) --- */
 .node-base {
-  @apply bg-slate-900 rounded-xl shadow-xl border border-slate-700 p-0 w-[350px] transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 hover:border-indigo-500/50;
+  @apply bg-white dark:bg-[#1E293B]/80 backdrop-blur-3xl rounded-[20px] border border-[#90E0EF]/10 p-0 w-[350px] transition-all duration-500 hover:-translate-y-1 hover:border-[#48CAE4]/40;
+}
+
+.node-base:hover {
+  box-shadow: 0 0 30px rgba(72, 202, 228, 0.1);
 }
 
 .node-high-score {
-  @apply ring-2 ring-emerald-500/50 shadow-emerald-500/20 bg-emerald-950/30;
+  @apply ring-1 ring-[#00AFB9]/30 shadow-[#00AFB9]/5 bg-[#00AFB9]/5;
 }
 
 .node-low-score {
   @apply opacity-60 grayscale-[0.8] hover:opacity-100 hover:grayscale-0;
 }
 
-/* --- Edge Styling --- */
+/* --- Edge Styling (Deep Midnight) --- */
 .react-flow__edge-path {
   stroke-width: 2px;
-  stroke: #475569;
-  /* slate-600 */
+  stroke: #023E8A;
+  opacity: 0.15;
 }
 
 .edge-selected path {
-  stroke: #10b981;
-  /* emerald-500 */
+  stroke: #48CAE4;
   stroke-width: 3px;
-  filter: drop-shadow(0 0 3px rgba(16, 185, 129, 0.5));
+  filter: drop-shadow(0 0 8px rgba(72, 202, 228, 0.3));
   animation: flowAnimation 1s linear infinite;
   stroke-dasharray: 10;
 }
 
 .edge-pruned path {
-  stroke: #e2e8f0;
-  /* slate-200 */
-  opacity: 0.4;
+  stroke: #CAF0F8;
+  opacity: 0.05;
 }
 
 @keyframes flowAnimation {
@@ -84,8 +105,22 @@
   }
 }
 
-/* Background Pattern for Graph */
+/* Background Pattern for Graph (Frosted Blue) */
 .dots-pattern {
-  background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
-  background-size: 20px 20px;
+  background-image: radial-gradient(#90E0EF 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.03;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(144, 224, 239, 0.1);
+  border-radius: 10px;
 }

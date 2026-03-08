@@ -1,0 +1,592 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import clsx from 'clsx'; // Added clsx import
+import {
+    BrainCircuit,
+    Sparkles,
+    CheckCircle2,
+    XCircle,
+    ArrowLeft,
+    Gamepad2,
+    FileText,
+    Database,
+    ChevronRight,
+    Send,
+    AlertCircle
+} from 'lucide-react';
+import DynamicVisualContainer from '../components/DynamicVisualContainer';
+import {
+    runSimulation,
+    savePerformance,
+    updateSessionProgress,
+    evaluateChallenge,
+    getLessonContent,
+    saveLessonContent,
+    syncStudentProgress
+} from '../services/api';
+
+const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
+    const [response, setResponse] = useState('');
+    const [isEvaluating, setIsEvaluating] = useState(false);
+    const [feedback, setFeedback] = useState(null);
+    const [score, setScore] = useState(null);
+
+    const handleSubmit = async () => {
+        if (!response.trim() || isEvaluating) return;
+        setIsEvaluating(true);
+        try {
+            const result = await evaluateChallenge({
+                student_id: "student_001",
+                session_id: sessionId,
+                topic_id: topic,
+                response: response,
+                context: context
+            });
+            setFeedback(result.feedback);
+            setScore(result.score);
+            if (result.score >= 0.7) {
+                onComplete(response, result.score);
+            }
+        } catch (err) {
+            console.error("Challenge Error:", err);
+        } finally {
+            setIsEvaluating(false);
+        }
+    };
+
+    return (
+        <div className="mt-12 p-8 bg-[#121212] rounded-[40px] border border-white/5 shadow-2xl relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-8 opacity-5 text-primary">
+                <BrainCircuit size={100} />
+            </div>
+
+            <div className="relative z-10 space-y-6">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
+                        <Gamepad2 size={20} className="text-primary" />
+                    </div>
+                    <div>
+                        <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-primary">Active Design Challenge</h4>
+                        <p className="text-sm text-zinc-400 font-light">Apply your knowledge to solve this problem</p>
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <textarea
+                        value={response}
+                        onChange={(e) => setResponse(e.target.value)}
+                        placeholder="Define 3-5 core attributes for this design..."
+                        disabled={score >= 0.7}
+                        className="w-full min-h-[160px] bg-black/40 border border-white/10 rounded-3xl p-6 text-zinc-300 placeholder:text-zinc-700 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 outline-none transition-all resize-none font-mono text-sm leading-relaxed"
+                    />
+
+                    {!feedback && (
+                        <button
+                            onClick={handleSubmit}
+                            disabled={!response.trim() || isEvaluating}
+                            className="w-full py-5 bg-primary text-white font-black rounded-full shadow-xl shadow-primary/10 hover:scale-[1.02] active:scale-95 disabled:opacity-30 disabled:grayscale transition-all flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-xs"
+                        >
+                            {isEvaluating ? 'AI Processing...' : 'Submit for Evaluation'}
+                            <Send size={16} />
+                        </button>
+                    )}
+                </div>
+
+                <AnimatePresence>
+                    {feedback && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className={clsx(
+                                "p-6 rounded-3xl border backdrop-blur-md",
+                                score >= 0.7 ? "bg-secondary/5 border-secondary/20" : "bg-danger/5 border-danger/20"
+                            )}
+                        >
+                            <div className="flex items-start gap-4">
+                                <div className={clsx(
+                                    "w-8 h-8 rounded-xl flex items-center justify-center shrink-0",
+                                    score >= 0.7 ? "bg-secondary/20 text-secondary" : "bg-danger/20 text-danger"
+                                )}>
+                                    {score >= 0.7 ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-xs font-black uppercase tracking-widest text-zinc-400">AI Feedback</span>
+                                        <span className={clsx(
+                                            "text-[10px] font-mono font-bold px-2 py-0.5 rounded-full",
+                                            score >= 0.7 ? "bg-secondary/10 text-secondary" : "bg-danger/10 text-danger"
+                                        )}>
+                                            Score: {(score * 100).toFixed(0)}%
+                                        </span>
+                                    </div>
+                                    <p className="text-sm font-light leading-relaxed text-zinc-300">{feedback}</p>
+                                    {score < 0.7 && (
+                                        <button
+                                            onClick={() => { setFeedback(null); setScore(null); }}
+                                            className="text-[10px] font-black uppercase tracking-widest text-primary hover:opacity-80 transition-opacity"
+                                        >
+                                            Try Again →
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </div>
+        </div>
+    );
+};
+
+// --- Guardrails & Error Boundary ---
+class ErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+    }
+    static getDerivedStateFromError(error) { return { hasError: true }; }
+    componentDidCatch(error, errorInfo) { console.error(">>> Component Crash Handled:", error, errorInfo); }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="p-8 rounded-3xl border border-danger/20 bg-danger/5 text-center">
+                    <p className="text-sm text-danger font-medium">Interactive component failed to load.</p>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, correctIndex }) => {
+    // Robust Null-Checks for AI-generated data
+    if (!quiz || !quiz.questions || !Array.isArray(quiz.questions)) {
+        return (
+            <div className="mt-8 p-6 bg-white/5 dark:bg-white/[0.02] rounded-3xl border border-white/5 flex items-center gap-3">
+                <AlertCircle className="text-zinc-500" size={16} />
+                <span className="text-xs text-zinc-500 italic">Quiz structure initialization failed. Skipping...</span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="mt-12 p-10 bg-[#121212] rounded-[48px] border border-white/5 shadow-2xl relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-8 opacity-5 text-primary">
+                <Sparkles size={120} />
+            </div>
+
+            <div className="relative z-10">
+                <div className="flex items-center gap-4 mb-8">
+                    <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
+                        <BrainCircuit size={20} className="text-primary" />
+                    </div>
+                    <div>
+                        <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-primary">Knowledge Synthesis Check</h4>
+                        <p className="text-xs text-zinc-500 font-light">Validate your understanding of the core concepts</p>
+                    </div>
+                </div>
+
+                {quiz.questions.map((q, qIdx) => (
+                    <div key={qIdx} className="space-y-8">
+                        <p className="text-2xl font-light text-white tracking-tight leading-relaxed">
+                            {q.question}
+                        </p>
+
+                        <div className="grid grid-cols-1 gap-4">
+                            {q.options?.map((option, idx) => {
+                                const isSelected = selectedOption === idx;
+                                const isCorrect = idx === q.correct_index;
+
+                                let btnClass = "bg-white/[0.02] border-white/5 text-zinc-400 hover:border-primary/30 hover:bg-white/[0.04]";
+                                if (isSelected) btnClass = "bg-primary/10 border-primary/50 text-white shadow-lg shadow-primary/10";
+                                if (isSubmitted) {
+                                    if (isCorrect) btnClass = "bg-secondary/10 border-secondary/50 text-secondary shadow-lg shadow-secondary/10";
+                                    else if (isSelected) btnClass = "bg-danger/10 border-danger/50 text-danger shadow-lg shadow-danger/10";
+                                }
+
+                                return (
+                                    <button
+                                        key={idx}
+                                        disabled={isSubmitted}
+                                        onClick={() => onOptionSelect(idx)}
+                                        className={`p-6 rounded-3xl border transition-all duration-300 text-left flex items-center justify-between text-base ${btnClass}`}
+                                    >
+                                        <span className="font-light">{option}</span>
+                                        {isSubmitted && isCorrect && <CheckCircle2 size={20} className="text-secondary" />}
+                                        {isSubmitted && isSelected && !isCorrect && <XCircle size={20} className="text-danger" />}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {isSubmitted && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="p-6 rounded-3xl bg-white/[0.02] border border-white/5"
+                            >
+                                <div className="flex gap-4">
+                                    <div className="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
+                                        <FileText size={16} className="text-zinc-400" />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <p className="text-xs font-black uppercase tracking-widest text-zinc-500">Pedagogical Insight</p>
+                                        <p className="text-sm font-light leading-relaxed text-zinc-400">{q.explanation}</p>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const LessonView = ({ sessionId, topic, onBack, onReady }) => {
+    const [loading, setLoading] = useState(true);
+    const [content, setContent] = useState(null);
+    const [isThinking, setIsThinking] = useState(true);
+    const [selectedOption, setSelectedOption] = useState(null);
+    const [isSubmitted, setIsSubmitted] = useState(false);
+    const [isChallengeComplete, setIsChallengeComplete] = useState(false);
+    const [isCompleting, setIsCompleting] = useState(false);
+    const [response, setResponse] = useState('');
+    const [score, setScore] = useState(null);
+    const [error, setError] = useState(null);
+    const [isVisualReady, setIsVisualReady] = useState(false);
+
+    useEffect(() => {
+        const initializeLesson = async () => {
+            if (!topic) return;
+            setLoading(true);
+            setIsThinking(true);
+            setIsVisualReady(false); // Reset on new topic
+            setSelectedOption(null);
+            setIsSubmitted(false);
+            setIsChallengeComplete(false);
+            try {
+                const topicId = topic.id || topic.title;
+                // 0. Check for existing content
+                const existing = await getLessonContent("student_001", topicId);
+                if (existing && (existing.content || existing.directive)) {
+                    console.log(">>> [Persistence] Loading saved lesson state");
+                    const savedDirective = existing.directive || existing.content;
+                    setContent(savedDirective);
+                    setIsThinking(false);
+                    if (existing.user_response) {
+                        setResponse(existing.user_response); // For Challenge
+                    }
+                    if (existing.ai_evaluation_score !== undefined) {
+                        setScore(existing.ai_evaluation_score);
+                        if (existing.ai_evaluation_score >= 0.7) setIsChallengeComplete(true);
+                    }
+                    setLoading(false);
+                    onReady?.();
+                    return;
+                }
+
+                const scenario = `Teach me about ${topic.title}`;
+                const result = await runSimulation(scenario, topic);
+
+                // Extract directive from the best path
+                const bestNodeId = result.meta?.best_path_ids?.[result.meta.best_path_ids.length - 1];
+                const bestNode = result.nodes?.find(n => n.id === bestNodeId);
+                const directive = bestNode?.data?.directive || {
+                    type: "explanation",
+                    content: result.meta?.final_response || "Concept synthesis complete."
+                };
+
+                // Save initial content for persistence
+                await saveLessonContent({
+                    student_id: "student_001",
+                    topic_id: topicId,
+                    content: directive,
+                    directive: directive
+                });
+
+                setContent(directive);
+
+                // ASYNC RENDER SYNCHRONIZATION: Verify content before dropping flag
+                if (directive && directive.content) {
+                    setTimeout(() => {
+                        setIsThinking(false);
+                        onReady?.();
+                    }, 1500); // Visual effect
+                } else {
+                    console.error(">>> [Hydration] Synthesis returned empty content. Retrying...");
+                    setError("Synthesis yielded empty content. Please try again.");
+                }
+
+            } catch (err) {
+                console.error("Lesson Init Error:", err);
+                setError("Failed to initialize cognitive path.");
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        initializeLesson();
+    }, [topic]);
+
+    const handleForceRegenerate = async () => {
+        setIsThinking(true);
+        setContent(null);
+        setError(null);
+        // Delete cache entry and re-run sim
+        try {
+            const topicId = topic.id || topic.title;
+            // We don't have a direct delete API, so we just overwrite with null and re-run
+            const scenario = `Teach me about ${topic.title}`;
+            const result = await runSimulation(scenario, topic);
+            const directive = result.nodes?.find(n => n.id === result.meta?.best_path_ids?.slice(-1)[0])?.data?.directive;
+            setContent(directive);
+            setIsThinking(false);
+        } catch (e) {
+            setError("Regeneration failed.");
+        }
+    };
+
+    const hasDesignChallenge = useMemo(() => {
+        const text = typeof content?.content === 'string' ? content.content : '';
+        return text.includes('Design Challenge') || text.includes('### Challenge');
+    }, [content, topic?.id]);
+
+    const mermaidData = useMemo(() => {
+        const text = typeof content?.content === 'string' ? content.content : '';
+        const match = text.match(/\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]/m);
+        return match ? match[1].trim() : null;
+    }, [content, topic?.id]);
+
+    const sanitizedContent = useMemo(() => {
+        if (typeof content?.content !== 'string') return '';
+        let text = content.content;
+
+        // Remove Mermaid tags from Markdown flow (handled by DynamicVisualContainer)
+        text = text.replace(/\[MERMAID_START\][\s\S]*?\[MERMAID_END\]/mg, '');
+
+        // Handle [IMAGE_FOR_ALEX] - Convert to a visual hint or Mermaid-friendly block
+        // In a real scenario, this would call an 'image_generation' API. 
+        // For now, we'll transform it into a specialized visual indicator.
+        text = text.replace(/\[IMAGE_FOR_ALEX\]/g, '\n\n> [!TIP]\n> **Visual Context Generated**: An specialized architectural snapshot has been generated for your learning profile Alex.\n\n');
+
+        return text.trim();
+    }, [content, topic?.id]);
+
+    // Conditional Guard for empty content
+    const isContentViewable = useMemo(() => {
+        return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge);
+    }, [sanitizedContent, mermaidData, content, hasDesignChallenge]);
+
+    const isReadyToComplete = useMemo(() => {
+        if (!isContentViewable) return false;
+        if (mermaidData && !isVisualReady) return false; // HydrationGuard
+        if (content?.type === 'quiz') return isSubmitted;
+        if (hasDesignChallenge) return isChallengeComplete;
+        return true;
+    }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady]);
+
+    const handleComplete = async () => {
+        if (!sessionId || !topic || isCompleting) return;
+        setIsCompleting(true);
+        try {
+            // 1. Mark as completed
+            await updateSessionProgress(sessionId, topic.title);
+
+            // 2. Sync full lesson state to MongoDB
+            const finalPayload = {
+                student_id: "student_001",
+                topic_id: topic.title,
+                content: content,
+                user_response: response,
+                ai_evaluation_score: score
+            };
+            await saveLessonContent(finalPayload);
+            await syncStudentProgress(finalPayload);
+
+            // 3. Save Performance if quiz was attempted
+            if (content?.type === 'quiz' && isSubmitted) {
+                await savePerformance({
+                    student_id: "student_001",
+                    session_id: sessionId,
+                    topic_id: topic.title,
+                    score: selectedOption === content.quiz?.correct_index ? 100 : 0,
+                    total_questions: 1,
+                    correct_answers: selectedOption === content.quiz?.correct_index ? 1 : 0
+                });
+            }
+
+            // 3. Navigate back
+            onBack();
+        } catch (err) {
+            console.error("Completion Error:", err);
+        } finally {
+            setIsCompleting(false);
+        }
+    };
+
+    if (error) return (
+        <div className="h-full flex flex-col items-center justify-center p-10 text-center gap-6">
+            <XCircle size={48} className="text-danger opacity-50" />
+            <p className="text-zinc-500 dark:text-slate-400">{error}</p>
+            <button onClick={onBack} className="text-primary font-bold uppercase tracking-widest text-xs">Return to Browser</button>
+        </div>
+    );
+
+    return (
+        <div className="h-full w-full bg-edu-bg-light dark:bg-edu-bg-dark transition-colors overflow-y-auto custom-scrollbar">
+            <div className="max-w-4xl mx-auto p-6 lg:p-12 min-h-full flex flex-col">
+
+                {/* Header */}
+                <header className="flex items-center justify-between mb-12">
+                    <button
+                        onClick={onBack}
+                        className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 dark:text-slate-500 hover:text-primary transition-colors"
+                    >
+                        <ArrowLeft size={14} />
+                        Exit Module
+                    </button>
+                    <div className="flex items-center gap-4">
+                        {error && (
+                            <button
+                                onClick={handleForceRegenerate}
+                                className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-danger hover:opacity-80 transition-opacity"
+                            >
+                                <Sparkles size={14} />
+                                Force Regenerate
+                            </button>
+                        )}
+                        <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-primary">Live Synthesis Active</span>
+                        </div>
+                    </div>
+                </header>
+
+                <main className="flex-1 space-y-12 pb-24">
+                    {isThinking ? (
+                        <div className="h-[60vh] flex flex-col items-center justify-center gap-8 bg-white/40 dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[40px] backdrop-blur-3xl shadow-sm transition-all">
+                            <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                            <div className="space-y-2 text-center">
+                                <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-primary animate-pulse">Orchestrating Knowledge Path</h3>
+                                <p className="text-zinc-400 dark:text-slate-500 text-xs font-light tracking-wide">Synthesizing {topic?.title}...</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="space-y-12"
+                        >
+                            <div className="space-y-4">
+                                <h2 className="text-4xl lg:text-5xl font-light text-edu-text-light dark:text-white tracking-tight">
+                                    {topic?.title}
+                                </h2>
+                                <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 dark:text-slate-500 tracking-wide">
+                                    <span className="flex items-center gap-1.5"><Gamepad2 size={14} /> Interactive Node</span>
+                                    <span className="w-1 h-1 rounded-full bg-zinc-200 dark:bg-white/10" />
+                                    <span className="flex items-center gap-1.5"><FileText size={14} /> {content?.type || 'Synthesis'}</span>
+                                </div>
+                            </div>
+
+                            <article className="prose prose-lg dark:prose-invert prose-indigo max-w-none">
+                                <div className="text-xl font-light leading-relaxed text-zinc-600 dark:text-slate-300 transition-colors">
+                                    <ReactMarkdown components={{
+                                        code({ node, inline, className, children, ...props }) {
+                                            return (
+                                                <code className="bg-primary/20 text-white px-2 py-0.5 rounded text-sm font-mono border border-primary/30" {...props}>
+                                                    {children}
+                                                </code>
+                                            )
+                                        },
+                                        p: ({ children }) => <p className="mb-6 leading-relaxed opacity-90">{children}</p>,
+                                        h3: ({ children }) => <h3 className="text-2xl font-light text-primary mt-12 mb-6 tracking-tight">{children}</h3>,
+                                        li: ({ children }) => <li className="mb-3 list-disc list-inside opacity-80">{children}</li>,
+                                        strong: ({ children }) => <strong className="font-bold text-white border-b border-primary/30">{children}</strong>
+                                    }}>
+                                        {sanitizedContent}
+                                    </ReactMarkdown>
+                                </div>
+                            </article>
+
+                            {/* ComponentFactory: Dynamic Hydration Layer */}
+                            {mermaidData && (
+                                <DynamicVisualContainer
+                                    type="mermaid"
+                                    data={mermaidData}
+                                    onMountFailure={handleForceRegenerate}
+                                    onRender={(success) => setIsVisualReady(success)}
+                                />
+                            )}
+
+                            {hasDesignChallenge && (
+                                <ErrorBoundary onMountFailure={handleForceRegenerate}>
+                                    <ChallengeComponent
+                                        topic={topic?.title}
+                                        context={content?.content}
+                                        sessionId={sessionId}
+                                        onComplete={(userRes, evaluationScore) => {
+                                            setIsChallengeComplete(true);
+                                            setResponse(userRes);
+                                            setScore(evaluationScore);
+                                        }}
+                                    />
+                                </ErrorBoundary>
+                            )}
+
+                            {content?.type === 'quiz' && (
+                                <ErrorBoundary onMountFailure={handleForceRegenerate}>
+                                    <QuizComponent
+                                        quiz={content.quiz}
+                                        selectedOption={selectedOption}
+                                        onOptionSelect={setSelectedOption}
+                                        isSubmitted={isSubmitted}
+                                        correctIndex={content.quiz?.correct_index}
+                                    />
+                                </ErrorBoundary>
+                            )}
+
+                            {content?.type === 'quiz' && !isSubmitted && selectedOption !== null && (
+                                <button
+                                    onClick={() => setIsSubmitted(true)}
+                                    className="w-full py-5 bg-primary text-white font-black rounded-full shadow-2xl shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-xs uppercase tracking-[0.3em]"
+                                >
+                                    Verify Knowledge knowledge
+                                </button>
+                            )}
+
+                            <div className="pt-12 border-t border-edu-border-light dark:border-white/5 flex flex-col items-center gap-8">
+                                <div className="flex items-center gap-3 opacity-50">
+                                    <Database size={16} className="text-zinc-400" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Persistent Cognition Layer Active</span>
+                                </div>
+
+                                <AnimatePresence>
+                                    {isReadyToComplete && (
+                                        <motion.button
+                                            initial={{ opacity: 0, scale: 0.9 }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            exit={{ opacity: 0, scale: 0.9 }}
+                                            onClick={handleComplete}
+                                            disabled={isCompleting}
+                                            className="group relative px-16 py-6 bg-secondary text-white font-black rounded-full shadow-2xl shadow-secondary/20 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 flex items-center gap-3 overflow-hidden"
+                                        >
+                                            <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-500" />
+                                            <span className="relative z-10 uppercase tracking-[0.3em] text-xs">
+                                                {isCompleting ? 'Synchronizing...' : 'Complete Module'}
+                                            </span>
+                                            <CheckCircle2 size={18} className="relative z-10" />
+                                        </motion.button>
+                                    )}
+                                </AnimatePresence>
+                            </div>
+                        </motion.div>
+                    )}
+                </main>
+            </div>
+        </div>
+    );
+};
+
+export default LessonView;

@@ -8,11 +8,74 @@ from services.learning_plan_service import LearningPlanService
 class LearningSessionService:
     # In-memory Mock Store
     MOCK_DB = {}
+    MOCK_PERFORMANCE = []
 
     def __init__(self):
         self.db = get_db_connection()
         self.plans = self.db.get_collection("learning_plans") if self.db is not None else None
         self.sessions = self.db.get_collection("learning_sessions") if self.db is not None else None
+        self.performance = self.db.get_collection("performance") if self.db is not None else None
+        self.generated_content = self.db.get_collection("generated_content") if self.db is not None else None
+        self.student_progress = self.db.get_collection("student_progress") if self.db is not None else None
+
+    def get_generated_content(self, student_id: str, topic_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves existing generated content for a topic and student.
+        """
+        if self.generated_content is not None:
+            try:
+                content = self.generated_content.find_one({
+                    "student_id": student_id,
+                    "topic_id": topic_id
+                })
+                if content:
+                    content["_id"] = str(content["_id"])
+                    return content
+                return None
+            except Exception as e:
+                print(f"Get Generated Content Error: {e}")
+                return None
+        return None
+
+    def save_generated_content(self, content_data: Dict[str, Any]) -> bool:
+        """
+        Upserts generated content for a topic.
+        """
+        if self.generated_content is not None:
+            try:
+                self.generated_content.update_one(
+                    {
+                        "student_id": content_data["student_id"],
+                        "topic_id": content_data["topic_id"]
+                    },
+                    {"$set": {**content_data, "updated_at": datetime.now()}},
+                    upsert=True
+                )
+                return True
+            except Exception as e:
+                print(f"Save Generated Content Error: {e}")
+                return False
+        return True
+
+    def save_student_progress(self, progress_data: Dict[str, Any]) -> bool:
+        """
+        Saves the full student progress state for a module.
+        """
+        if self.student_progress is not None:
+            try:
+                self.student_progress.update_one(
+                    {
+                        "student_id": progress_data["student_id"],
+                        "topic_id": progress_data["topic_id"]
+                    },
+                    {"$set": {**progress_data, "updated_at": datetime.now()}},
+                    upsert=True
+                )
+                return True
+            except Exception as e:
+                print(f"Save Student Progress Error: {e}")
+                return False
+        return True
 
     def create_session(self, plan_id: str, student_id: str) -> str:
         """
@@ -139,6 +202,89 @@ class LearningSessionService:
                      sessions.append(sess_display)
             # Sort mock results if needed, skipping for now
             return sessions
+
+    def update_session_progress(self, session_id: str, topic_id: str) -> bool:
+        """
+        Updates the session progress, marking a topic as completed and recalculating percentage.
+        """
+        print(f"Updating progress for Session={session_id}, Topic={topic_id}")
+        
+        if self.sessions is not None and self.plans is not None:
+            try:
+                # 1. Fetch Session and Plan
+                session = self.sessions.find_one({"_id": ObjectId(session_id)})
+                if not session: return False
+                
+                plan = self.plans.find_one({"_id": session["plan_id"]})
+                if not plan: return False
+                
+                # 2. Update Completed Topics
+                completed = session.get("progress", {}).get("completed_topics", [])
+                if topic_id not in completed:
+                    completed.append(topic_id)
+                
+                # 3. Calculate Percent Complete
+                total_topics = 0
+                for lecture in plan.get("curriculum", {}).get("structure", []):
+                    total_topics += len(lecture.get("children", []))
+                
+                percent = (len(completed) / total_topics * 100) if total_topics > 0 else 100
+                
+                # 4. Save
+                self.sessions.update_one(
+                    {"_id": ObjectId(session_id)},
+                    {
+                        "$set": {
+                            "progress.completed_topics": completed,
+                            "progress.percent_complete": round(percent, 1),
+                            "last_accessed_at": datetime.now()
+                        }
+                    }
+                )
+                return True
+            except Exception as e:
+                print(f"Update Progress Error: {e}")
+                return False
+        else:
+            # Mock Implementation
+            session = LearningSessionService.MOCK_DB.get(session_id)
+            if not session: return False
+            
+            plan = LearningPlanService.MOCK_DB.get(session["plan_id"])
+            if not plan: return False
+            
+            completed = session.get("progress", {}).get("completed_topics", [])
+            if topic_id not in completed:
+                completed.append(topic_id)
+            
+            total_topics = 0
+            for lecture in plan.get("curriculum", {}).get("structure", []):
+                total_topics += len(lecture.get("children", []))
+            
+            percent = (len(completed) / total_topics * 100) if total_topics > 0 else 100
+            
+            session["progress"]["completed_topics"] = completed
+            session["progress"]["percent_complete"] = round(percent, 1)
+            session["last_accessed_at"] = datetime.now()
+            return True
+
+    def save_performance_record(self, record: Dict[str, Any]) -> bool:
+        """
+        Saves a student's performance record for a topic.
+        """
+        print(f"Saving performance record for Student={record.get('student_id')}, Topic={record.get('topic_id')}")
+        
+        if self.performance is not None:
+            try:
+                self.performance.insert_one(record)
+                return True
+            except Exception as e:
+                print(f"Save Performance Error: {e}")
+                return False
+        else:
+            # Mock Implementation
+            LearningSessionService.MOCK_PERFORMANCE.append(record)
+            return True
 
     def delete_session(self, session_id: str) -> bool:
         if self.sessions is not None:

@@ -5,12 +5,14 @@ import uuid
 
 # RL Policy -> Allowed Execution Strategies Mapping
 RL_ACTION_MAP = {
-    0: {"name": "Simplify content", "allowed": ["step_by_step", "reduce_cognitive_load", "recap"]},
-    1: {"name": "Add interactive example", "allowed": ["guided_practice", "mini_exercise", "gamified_prompt"]},
-    2: {"name": "Provide hint", "allowed": ["socratic_hint", "visual_hint", "worked_example_hint"]},
-    3: {"name": "Increase difficulty", "allowed": ["challenge_problem", "extension_task"]},
-    4: {"name": "Revise topic", "allowed": ["concept_reframing", "prerequisite_review"]},
-    5: {"name": "Encourage student", "allowed": ["motivational_feedback", "confidence_boost"]}
+    0: {"name": "Provide hint", "allowed": ["socratic_hint", "visual_hint", "worked_example_hint"]},
+    1: {"name": "Worked example", "allowed": ["step_by_step", "demonstration", "scaffolded_demo"]},
+    2: {"name": "Practice quiz", "allowed": ["mini_quiz", "concept_check", "knowledge_retrieval"]},
+    3: {"name": "Challenge problem", "allowed": ["advanced_application", "problem_solving", "extension"]},
+    4: {"name": "Modality shift", "allowed": ["video_to_interactive", "text_to_visual", "hands_on"]},
+    5: {"name": "Short break", "allowed": ["mindful_reset", "breather", "topic_switch"]},
+    6: {"name": "Personalized feedback", "allowed": ["empathetic_correction", "constructive_critique"]},
+    7: {"name": "Adaptive difficulty", "allowed": ["dynamic_scaffolding", "complexity_tuning"]}
 }
 
 class ThoughtNode(BaseModel):
@@ -32,6 +34,13 @@ class ToTConfig(BaseModel):
     score_threshold: float = 0.85
     max_nodes: int = 20
 
+class StudentStateSnapshot(BaseModel):
+    engagement_trend: str  # "declining", "stable", "improving"
+    current_affect: Dict[str, Any]
+    rl_strategy: str
+    performance_summary: str
+    deviation_alert: bool = False
+
 class AgentState(TypedDict):
     # Inputs
     student_id: str
@@ -39,7 +48,8 @@ class AgentState(TypedDict):
     
     # Internal State
     profile: Optional[Dict]
-    context_data: Optional[Dict]
+    context_data: Optional[Dict] # Now holds StudentStateSnapshot
+    teaching_strategy: Optional[Dict] # RL Engine input
     
     frontier: List[ThoughtNode]
     tree_memory: Dict[str, ThoughtNode]

@@ -53,7 +53,7 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
         type: 'smoothstep',
         animated: true,
         style: {
-            stroke: '#64748b', // Slate-500
+            stroke: '#6366F1', // primary
             strokeWidth: 3
         }
     }));
@@ -141,7 +141,7 @@ const TreeVisualizer = ({ data, onAnimationComplete }) => {
     }, [playbackIndex, fullLayout, setNodes, setEdges, fitView]);
 
     return (
-        <div className="flex-1 h-full bg-slate-950">
+        <div className="flex-1 h-full bg-edu-bg-light dark:bg-edu-bg-dark transition-colors">
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -152,8 +152,8 @@ const TreeVisualizer = ({ data, onAnimationComplete }) => {
                 attributionPosition="bottom-right"
                 nodesDraggable={false} // Keep layout stable during playback
             >
-                <Background color="#1e293b" gap={20} />
-                <Controls className="bg-white/10 border-white/20 fill-slate-300 text-slate-300" />
+                <Background color="#6366F1" opacity={0.05} gap={20} />
+                <Controls className="bg-edu-surface-light dark:bg-white/10 border-edu-border-light dark:border-white/20 fill-edu-text-light dark:fill-slate-300 text-edu-text-light dark:text-slate-300" />
             </ReactFlow>
         </div>
     );

@@ -131,6 +131,7 @@ def decompose_goal(goal: str) -> Dict[str, Any]:
                  parsed = json.loads(clean)
 
             # Construct Hierarchy
+            import uuid
             topic_children = []
             for topic in parsed.get("topics", []):
                 
@@ -152,6 +153,7 @@ def decompose_goal(goal: str) -> Dict[str, Any]:
                     continue
 
                 topic_children.append({
+                    "id": str(uuid.uuid4()),
                     "title": topic["title"],
                     "type": "TOPIC",
                     "evidence": {

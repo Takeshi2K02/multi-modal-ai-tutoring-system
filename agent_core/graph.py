@@ -1,5 +1,6 @@
 import os
 import uuid
+import asyncio
 from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import PromptTemplate
@@ -9,10 +10,12 @@ import re
 
 from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
-from agent_core.schemas import AgentState, ThoughtNode, ToTConfig
+from agent_core.schemas import AgentState, ThoughtNode, ToTConfig, StudentStateSnapshot
 from agent_core.llm import get_llm
 from agent_core.strategy_taxonomy import StrategyType
 from agent_core.optimization import compute_outcome
+from agent_core.snapshot import get_student_snapshot
+from services.vector_factory import get_vector_db
 
 # Configuration
 CONFIG = ToTConfig(
@@ -23,37 +26,33 @@ CONFIG = ToTConfig(
 )
 
 # Initialize LLM
-# Initialize LLM
 llm = get_llm()
+
+# Vertex AI Rate Limiting Semaphore (Tier 1: 2,000 RPM safety)
+semaphore = asyncio.Semaphore(10)
 
 # Helper for robust parsing
 def extract_json_from_text(text: str) -> Dict:
     """
-    Extracts the first valid JSON object from a string, handling markdown blocks
-    and conversational preambles/postscripts common in local LLMs.
+    Extracts the first valid JSON object from a string, handling markdown blocks.
     """
     try:
-        # First, try to find a JSON block between backticks
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if match:
             return json.loads(match.group(1))
-            
-        # If no code block, try to find the first { and the last }
-        # This catches "Here is the JSON: { ... } Hope that helps!"
         match = re.search(r"(\{.*\})", text, re.DOTALL)
         if match:
             return json.loads(match.group(1))
-            
-        # Final fallback: try raw
         return json.loads(text)
     except Exception as e:
         raise ValueError(f"Failed to extract JSON from text: {text[:100]}... Error: {e}")
 
 # --- Nodes ---
 
-def retrieve_context(state: AgentState) -> AgentState:
+async def retrieve_context(state: AgentState) -> AgentState:
     """
     Node 1: Fetches context and initializes the tree root.
+    Prioritizes RL 'teaching_strategy' if provided.
     """
     print("--- Node: Retrieve Context & Init Root ---")
     memory = MemoryManager()
@@ -61,21 +60,19 @@ def retrieve_context(state: AgentState) -> AgentState:
     
     profile = memory.get_student_profile(student_id)
     
-    # Mocks
-    test_cv_state = state.get("context_data", {}).get("test_cv_state", "neutral")
-    cv_data = get_mock_cv_inputs(state=test_cv_state)
-    rl_strategy = get_mock_rl_strategy() # Returns Dict with action_id, reasoning, etc.
+    # --- TIME-SERIES SNAPSHOT INTEGRATION ---
+    # Non-blocking lookup of latest CV/RL/Performance state
+    snapshot = get_student_snapshot(student_id)
     
-    # ENRICHMENT: Map action_id to human-readable name for UI transparency
-    from agent_core.schemas import RL_ACTION_MAP
-    action_id = rl_strategy.get("action_id", 2)
-    current_policy = RL_ACTION_MAP.get(action_id, {"name": "Unknown Policy"})
-    rl_strategy["policy_name"] = current_policy["name"]
+    # --- RAG INTEGRATION ---
+    vectordb = get_vector_db()
+    rag_results = vectordb.search(state["user_query"], top_k=5)
+    rag_context = "\n---\n".join([r["text"] for r in rag_results])
     
     context_data = {
-        "cv": cv_data,
-        "rl_hint": rl_strategy,
-        "history": memory.get_recent_history(student_id)
+        "snapshot": snapshot.dict(),
+        "history": memory.get_recent_history(student_id),
+        "rag_evidence": rag_context
     }
 
     # Initialize Root Node
@@ -87,6 +84,15 @@ def retrieve_context(state: AgentState) -> AgentState:
         metadata={"type": "root"}
     )
     
+    # Broadcast to Admin Dashboard
+    from server import sio
+    await sio.emit("tot_step", {
+        "step": "retrieve_context",
+        "snapshot": snapshot.dict(),
+        "student_id": student_id,
+        "query": state["user_query"]
+    })
+    
     return {
         **state,
         "profile": profile,
@@ -96,28 +102,28 @@ def retrieve_context(state: AgentState) -> AgentState:
         "best_node": root_node
     }
 
-def expand_frontier(state: AgentState) -> AgentState:
+async def expand_frontier(state: AgentState) -> AgentState:
     """
     Node 2: Expands the current frontier by generating thoughts.
-    Depth 0->1: Strategies
-    Depth 1->2: Substeps/Content
+    Uses async gathering for efficiency.
     """
     frontier = state["frontier"]
     if not frontier:
-        return state # Should be caught by stop condition, but safety check
+        return state
 
     current_depth = frontier[0].depth
     next_depth = current_depth + 1
     
     print(f"--- Node: Expand Frontier (Depth {current_depth} -> {next_depth}) ---")
     
-    new_frontier = []
     tree_memory = state["tree_memory"].copy()
     
-    for node in frontier:
-        # Generate children for this node
-        children_contents = _generate_children_content(state, node, next_depth)
-        
+    # Generate children for all nodes in frontier concurrently
+    tasks = [_generate_children_content(state, node, next_depth) for node in frontier]
+    all_children_contents = await asyncio.gather(*tasks)
+    
+    new_frontier = []
+    for node, children_contents in zip(frontier, all_children_contents):
         for content in children_contents:
             child = ThoughtNode(
                 parent_id=node.id,
@@ -125,203 +131,200 @@ def expand_frontier(state: AgentState) -> AgentState:
                 content=content["content"],
                 metadata=content.get("metadata", {})
             )
-            # Add to local tracking
             new_frontier.append(child)
             tree_memory[child.id] = child
             
+    # Broadcast to Admin Dashboard
+    from server import sio
+    await sio.emit("tot_step", {
+        "step": "expand_frontier",
+        "depth": next_depth,
+        "new_nodes_count": len(new_frontier)
+    })
+            
     return {**state, "frontier": new_frontier, "tree_memory": tree_memory}
 
-def _generate_children_content(state: AgentState, parent_node: ThoughtNode, target_depth: int) -> List[Dict]:
+async def _generate_children_content(state: AgentState, parent_node: ThoughtNode, target_depth: int) -> List[Dict]:
     """
-    Helper to generate content based on depth.
+    Helper to generate content using LLM with Rate Limiting Semaphore.
     """
     profile = state["profile"]
     context = state["context_data"]
     query = state["user_query"]
     
-    import time
-
     max_retries = 3
-    base_delay = 5
+    base_delay = 2
 
-    if target_depth == 1:
-        # Generate Strategies
-        # ENFORCE RL POLICY: Get action_id and look up allowed strategies
-        rl_data = context.get("rl_hint", {})
-        # Handle both dict and string representation if necessary (mocks return dict)
-        action_id = rl_data.get("action_id", 2) # Default to Hint (2) if missing
-        
-        from agent_core.schemas import RL_ACTION_MAP
-        policy = RL_ACTION_MAP.get(action_id, RL_ACTION_MAP[2])
-        allowed_strategies = ", ".join(policy["allowed"])
-        policy_name = policy["name"]
-
-        valid_strategies = [st.value for st in StrategyType]
-        
-        prompt = PromptTemplate(
-            template="""
-            Role: You are a strict JSON data generator.
+    async with semaphore:
+        if target_depth == 1:
+            snapshot = context.get("snapshot", {})
+            valid_strategies = [st.value for st in StrategyType]
+            policy_name = snapshot.get("rl_strategy", "General Instruction")
             
-            Student: {profile}
-            
-            REAL-TIME SIGNALS:
-            CV Data: {cv}
-            
-            RL POLICY INSTRUCTION (MANDATORY):
-            - Policy Action: "{policy_name}" (ID: {action_id})
-            - ALLOWED STRATEGIES: [{allowed_strategies}]
-            
-            Goal: {query}
-            
-            TASK: Generate {k} distinct execution strategies that strictly align with the ALLOWED STRATEGIES list.
-            
-            CRITICAL: You MUST use one of these fixed 'strategy_type' IDs:
-            {valid_strategies}
-            
-            OUTPUT RULES:
-            1. Return ONLY valid JSON.
-            2. The "label" MUST be one of the Allowed Strategies (or a very close variation).
-            3. "strategy_type" MUST be one of the valid IDs.
-            4. "approach" should explain how you will apply it.
-            
-            JSON FORMAT:
-            {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "Description" }}, ... ] }}
-            """,
-            input_variables=["profile", "cv", "policy_name", "action_id", "allowed_strategies", "query", "k", "valid_strategies"]
-        )
-        
-        for attempt in range(max_retries):
-            try:
-                # Use StrOutputParser + Custom Extraction for robustness against "Chatty" LLMs
-                chain = prompt | llm | StrOutputParser()
-                raw_res = chain.invoke({
-                    "profile": str(profile), 
-                    "cv": json.dumps(context["cv"], ensure_ascii=False), 
-                    "policy_name": policy_name,
-                    "action_id": action_id,
-                    "allowed_strategies": allowed_strategies,
-                    "query": query, "k": CONFIG.branching_factor,
-                    "valid_strategies": ", ".join(valid_strategies)
-                })
+            prompt = PromptTemplate(
+                template="""
+                Role: You are a Senior BI Architect mentoring a 'BI Engineering Intern' at Mack Air/John Keells.
                 
-                res = extract_json_from_text(raw_res)
-
-                # ROBUST PARSING: Handle if LLM returns a List directly instead of {"options": [...]}
-                options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                Student Profile: {profile}
+                Student State (Snapshot): {snapshot}
+                Goal: {query}
                 
-                # Tag nodes with policy info for tracing
-                results = []
-                for opt in options:
-                    results.append({
-                        "content": opt["label"], 
-                        "metadata": {
-                            "approach": opt.get("approach", ""), 
-                            "strategy_type": opt.get("strategy_type", "visual_explanation"),
-                            "type": "strategy",
-                            "policy_id": action_id,
-                            "policy_name": policy_name
-                        }
+                GROUNDED EVIDENCE (RAG):
+                {rag_evidence}
+                
+                TASK: Generate {k} strategies that match the RL Policy: {policy_name}.
+                STRICT REQUIREMENT: Prioritize GROUNDED EVIDENCE over generic knowledge. 
+                If discussing Data Types, explain them via SQL Schemas, Facts/Dimensions, and Data Warehousing concepts.
+                
+                JSON FORMAT:
+                {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "mentorship-style approach" }}, ... ] }}
+                """,
+                input_variables=["profile", "snapshot", "policy_name", "rag_evidence", "query", "k", "valid_strategies"]
+            )
+            
+            for attempt in range(max_retries):
+                try:
+                    chain = prompt | llm | StrOutputParser()
+                    raw_res = await chain.ainvoke({
+                        "profile": str(profile), 
+                        "snapshot": json.dumps(snapshot),
+                        "policy_name": snapshot.get("rl_strategy", "General Instruction"),
+                        "rag_evidence": context.get("rag_evidence", ""),
+                        "query": query, "k": CONFIG.branching_factor,
+                        "valid_strategies": ", ".join(valid_strategies)
                     })
-                return results
+                    res = extract_json_from_text(raw_res)
+                    options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                    action_id = snapshot.get("action_id", 2)
+                    results = []
+                    for opt in options:
+                        results.append({
+                            "content": opt["label"], 
+                            "metadata": {
+                                "approach": opt.get("approach", ""), 
+                                "strategy_type": opt.get("strategy_type", "visual_explanation"),
+                                "type": "strategy",
+                                "policy_id": action_id,
+                                "policy_name": policy_name
+                            }
+                        })
+                    return results
+                except Exception as e:
+                    print(f"Gen D1 Failed: {e}")
+                    await asyncio.sleep(base_delay * (attempt + 1))
+            return []
 
-            except Exception as e:
-                print(f"Gen D1 Attempt {attempt+1} Failed: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(base_delay * (attempt + 1))
-                else:
-                    raise e
+        elif target_depth == 2:
+            snapshot = context.get("snapshot", {})
 
-
-
-    elif target_depth == 2:
-        # Generate Substeps / Content for the Strategy
-        prompt = PromptTemplate(
-            template="""
-            Role: You are a strict JSON data generator. You do not speak.
-            
-            Student: {profile}
-            Context: {cv}
-            Strategy: {strategy} ({approach})
-            Goal: {query}
-            
-            TASK: Generate {k} variations of specific content directives.
-            
-            OUTPUT RULES:
-            1. Return ONLY valid JSON.
-            2. Start output immediately with {{.
-            
-            JSON FORMAT: 
-            {{
-                "options": [
-                    {{
-                        "directive": {{
-                            "type": "explanation | quiz | summary",
-                            "format": "text",
-                            "parameters": {{ "tone": "encouraging", "complexity": "low" }},
-                            "content": "The actual full text of the explanation..."
-                        }},
-                        "focus": "Main focus/theme of this variation"
-                    }}
-                ]
-            }}
-            """,
-            input_variables=["profile", "cv", "strategy", "approach", "query", "k"]
-        )
-        for attempt in range(max_retries):
-            try:
-                chain = prompt | llm | StrOutputParser()
-                parent_approach = parent_node.metadata.get("approach", "")
-                raw_res = chain.invoke({
-                    "profile": str(profile), 
-                    "cv": json.dumps(context["cv"], ensure_ascii=False), 
-                    "strategy": parent_node.content, "approach": parent_approach,
-                    "query": query, "k": CONFIG.branching_factor
-                })
+            prompt = PromptTemplate(
+                template="""
+                Role: You are a Senior BI Architect presenting a lecture to a 'BI Engineering Intern' at Mack Air/John Keells.
                 
-                res = extract_json_from_text(raw_res)
+                Context (Grounded Evidence):
+                {rag_evidence}
                 
-                # ROBUST PARSING: Handle if LLM returns a List directly instead of {"options": [...]}
-                options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                Goal: {query}
+                Strategy: {strategy} ({approach})
                 
-                # Transform into ThoughtNodes
-                # We store the "content" text in node.content (for UI visibility)
-                # We store the full "directive" object in node.metadata (for Content Generator)
-                children = []
-                for opt in options:
-                    directive = opt.get("directive", {})
-                    # Fallback if LLM messes up structure but gives text
-                    content_val = directive.get("content", opt.get("text", "No content provided"))
-                    
-                    # Ensure content is a string for ThoughtNode schema
-                    if isinstance(content_val, (list, dict)):
-                        content_text = json.dumps(content_val, ensure_ascii=False)
-                    else:
-                        content_text = str(content_val)
-                    
-                    children.append({
-                        "content": content_text,
-                        "metadata": {
-                            "focus": opt.get("focus", ""),
-                            "type": "response",
-                            "directive": directive # The full structured output
+                TASK: Provide {k} variations.
+                STRICT REQUIREMENT: 
+                1. Anchored primarily in Grounded Evidence.
+                2. Use BI terminology (Facts, Dimensions, Star Schemas, Warehousing).
+                3. TRIGGER MULTIMODAL RENDERING: If technical structure is complex, include a Mermaid.js diagram using tags:
+                   [MERMAID_START]
+                   graph TD
+                   ...
+                   [MERMAID_END]
+                
+                STRICT JSON OUTPUT FORMAT (MANDATORY):
+                {
+                    "options": [
+                        {
+                            "directive": {
+                                "type": "explanation | quiz | challenge",
+                                "content": "Full pedagogical content (Markdown) with [MERMAID_START]...[MERMAID_END] or [IMAGE_FOR_ALEX] tags if needed",
+                                "quiz": { 
+                                    "questions": [
+                                        {
+                                            "question": "The MCQ Question",
+                                            "options": ["A", "B", "C", "D"],
+                                            "correct_index": 0,
+                                            "explanation": "Why A is correct"
+                                        }
+                                    ],
+                                    "type": "multiple-choice"
+                                },
+                                "challenge": {
+                                    "type": "text",
+                                    "description": "Challenge description",
+                                    "attributes_required": 3
+                                }
+                            }
                         }
+                    ]
+                }
+                """,
+                input_variables=["rag_evidence", "strategy", "approach", "query", "k"]
+            )
+            for attempt in range(max_retries):
+                try:
+                    chain = prompt | llm | StrOutputParser()
+                    raw_res = await chain.ainvoke({
+                        "rag_evidence": context.get("rag_evidence", ""),
+                        "strategy": parent_node.content, 
+                        "approach": parent_node.metadata.get("approach", ""),
+                        "query": query, "k": CONFIG.branching_factor
                     })
-                return children
+                    res = extract_json_from_text(raw_res)
+                    options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
+                    
+                    children = []
+                    for opt in options:
+                        directive = opt.get("directive", {})
+                        # Robust extraction: directive.content -> opt.text -> opt.content -> opt (if string)
+                        content_val = directive.get("content") or opt.get("text") or opt.get("content")
+                        if not content_val and isinstance(opt, str):
+                            content_val = opt
+                        
+                        if not content_val:
+                            content_val = "No content"
+                        
+                        # PAYLOAD INTEGRITY CHECK for BI Architecture/ETL/Schema
+                        bi_keywords = ['architecture', 'etl', 'schema', 'data warehouse', 'star schema', 'snowflake']
+                        is_bi_technical = any(k in query.lower() for k in bi_keywords) or any(k in parent_node.content.lower() for k in bi_keywords)
+                        
+                        if is_bi_technical and target_depth == 2:
+                            # Verify Mermaid tags are present and have content
+                            mermaid_match = re.search(r"\[MERMAID_START\]([\s\S]+?)\[MERMAID_END\]", str(content_val))
+                            if not mermaid_match or len(mermaid_match.group(1).strip()) < 10:
+                                print(f">>> [Payload Integrity] Mermaid block missing or too short for BI topic. Adding fallback.")
+                                # We can't easily re-run here without recursion, so we append a fallback structural block if missing
+                                if "[MERMAID_START]" not in str(content_val):
+                                    content_val = str(content_val) + "\n\n[MERMAID_START]\ngraph TD\n  A[Data Source] --> B[ETL Layer]\n  B --> C[Data Warehouse]\n  C --> D[Analytics]\n[MERMAID_END]"
 
-            except Exception as e:
-                 print(f"Gen D2 Attempt {attempt+1} Failed: {e}")
-                 if attempt < max_retries - 1:
-                    time.sleep(base_delay * (attempt + 1))
-                 else:
-                    raise e
+                        # Ensure directive has the content for the UI
+                        directive["content"] = str(content_val)
+                            
+                        children.append({
+                            "content": str(content_val),
+                            "metadata": {
+                                "focus": opt.get("focus", ""),
+                                "type": "response",
+                                "directive": directive
+                            }
+                        })
+                    return children
+                except Exception as e:
+                    print(f"Gen D2 Failed: {e}")
+                    await asyncio.sleep(base_delay * (attempt + 1))
+            return []
 
-             
     return []
 
-def evaluate_frontier(state: AgentState) -> AgentState:
+async def evaluate_frontier(state: AgentState) -> AgentState:
     """
-    Node 3: Scores the new nodes in the frontier.
-    Calculates Path Score.
+    Node 3: Scores the new nodes in the frontier concurrently.
     """
     print("--- Node: Evaluate Frontier ---")
     frontier = state["frontier"]
@@ -330,26 +333,18 @@ def evaluate_frontier(state: AgentState) -> AgentState:
     if not frontier:
         return state
 
-    # Batch evaluate or loop (loop implies more LLM calls, batch is better)
-    # For simplicity in this POC, we'll evaluate in one prompt if possible, or loop.
-    # Evaluating a list of thoughts is easier.
-    
-    # We need to construct a robust prompt that sees the item + parent context
-    # Scoring: 0.0 to 1.0. 
-    # Path Score = Average(Node Score, Parent Path Score) OR Product.
-    # Let's use Simple Average for stability in POC: (ParentPathScore + LocalScore) / 2
+    tasks = [_score_node_content(state, node, tree_memory) for node in frontier]
+    local_scores = await asyncio.gather(*tasks)
     
     scored_frontier = []
+    current_best = state["best_node"]
     
-    for node in frontier:
-        local_score = _score_node_content(state, node, tree_memory)
+    for node, local_score in zip(frontier, local_scores):
         parent = tree_memory.get(node.parent_id)
         parent_path_score = parent.path_score if parent else 1.0
         
-        # Path accumulation logic: decay slightly to penalize depth, or avg.
-        # Let's do Average to keep it balanced.
         if node.depth == 1:
-            path_score = local_score # Strategy selection is critical
+            path_score = local_score
         else:
             path_score = (parent_path_score + local_score) / 2
             
@@ -357,174 +352,101 @@ def evaluate_frontier(state: AgentState) -> AgentState:
         node.path_score = path_score
         scored_frontier.append(node)
         
-    # Update Best Node
-    # Logic Update: Always update to the best of the CURRENT frontier (deeper) 
-    # so we track the path to the leaf, even if score decays from 1.0 (Root).
-    current_best = state["best_node"]
     frontier_best = max(scored_frontier, key=lambda x: x.path_score) if scored_frontier else None
-    
     if frontier_best:
         current_best = frontier_best
 
+    # Broadcast to Admin Dashboard
+    from server import sio
+    await sio.emit("tot_step", {
+        "step": "evaluate_frontier",
+        "scores": [n.score for n in scored_frontier]
+    })
+    
     return {**state, "frontier": scored_frontier, "best_node": current_best}
 
-def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
-    # Use LLM to score relevance
-    # Use LLM to score relevance
-    # Create Prompt with Taxonomy
-    valid_strategies = [st.value for st in StrategyType]
-    
+async def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
+    """
+    Scores the candidate path using Gemini.
+    """
+    snapshot = state["context_data"].get("snapshot", {})
+
     prompt = PromptTemplate(
         template="""
-        Role: You are a strict scoring engine.
+        Role: Pedagogical Scoring engine for Gemini 2.5 Flash.
         
         Goal: {query}
-        Evaluator Data: {cv}
-        Student: {profile}
+        Student State (Snapshot): {snapshot}
+        Student Profile: {profile}
         
-        Candidate: "{content}"
+        Candidate Path: "{content}"
+        Metadata: {metadata}
         
-        CRITERIA:
-        1. Context Match (Confused -> Scaffolded? Bored -> Fun?)
-        2. RL Alignment
+        SCORING (0.0 - 1.0):
+        1. Empathy Score (Multiplier if deviation_alert is True).
+        2. Alignment with RL Strategy: {rl_strategy}.
+        3. Multi-modal Effectiveness for Trend: {trend}.
         
-        OUTPUT RULES:
-        1. Return ONLY valid JSON.
-        2. Start with {{.
-        3. NO markdown.
-        
-        JSON FORMAT: {{ "score": 0.85 }}
+        JSON FORMAT: {{ "score": 0.xx }}
         """,
-        input_variables=["query", "cv", "profile", "depth", "content", "metadata"]
+        input_variables=["query", "snapshot", "profile", "rl_strategy", "trend", "content", "metadata"]
     )
-    chain = prompt | llm | StrOutputParser()
     
-    try:
-        raw_res = chain.invoke({
-            "query": state["user_query"],
-            "cv": json.dumps(state["context_data"]["cv"], ensure_ascii=False),
-            "profile": str(state["profile"]),
-            "depth": node.depth,
-            "content": node.content,
-            "metadata": str(node.metadata)
-        })
-        
-        # Robust extraction
-        res = extract_json_from_text(raw_res)
-        
-        score = res.get("score")
-        if score is None:
-            print(f"Scoring Warning: No 'score' key in {res}")
+    async with semaphore:
+        chain = prompt | llm | StrOutputParser()
+        try:
+            raw_res = await chain.ainvoke({
+                "query": state["user_query"],
+                "snapshot": json.dumps(snapshot),
+                "profile": str(state["profile"]),
+                "rl_strategy": snapshot.get("rl_strategy"),
+                "trend": snapshot.get("engagement_trend"),
+                "content": node.content,
+                "metadata": str(node.metadata)
+            })
+            res = extract_json_from_text(raw_res)
+            return float(res.get("score", 0.5))
+        except Exception as e:
+            print(f"Scoring Failed: {e}")
             return 0.5
-        return float(score)
-    except Exception as e:
-        print(f"Scoring Failed for node {node.id[:8]}: {e}")
-        return 0.5
 
-def prune_frontier(state: AgentState) -> AgentState:
+async def prune_frontier(state: AgentState) -> AgentState:
     """
-    Node 4: Selects the top K (Beam Width) nodes for the next iteration.
+    Node 4: Selects the top K (Beam Width) nodes.
     """
-    print(f"--- Node: Prune Frontier (Width {CONFIG.beam_width}) ---")
+    print(f"--- Node: Prune Frontier ---")
     frontier = state["frontier"]
     if not frontier:
         return state
         
-    # Tie-Breaking Logic
-    # 1. Identify Tie: Check if top N candidates have similar scores
-    # 2. Resolve: Use Student Learning Preferences (Confidence)
-    
+    # Standard beam search sorting by path_score
     sorted_frontier = sorted(frontier, key=lambda x: x.path_score, reverse=True)
-    
-    # Enrich frontier with Preference Confidence for sorting
-    profile = state["profile"]
-    preferences = profile.get("learning_preferences", {})
-    
-    def get_preference_score(node):
-        # We only have strategy type at depth 1. At depth 2, we inherit from parent.
-        st_type = node.metadata.get("strategy_type")
-        if not st_type and node.parent_id:
-             # Try to find parent
-             from memory.student_memory import MemoryManager # Lazy import to avoid cycle if any
-             # Actually we use tree_memory in state
-             tree_mem = state["tree_memory"]
-             parent = tree_mem.get(node.parent_id)
-             if parent:
-                 st_type = parent.metadata.get("strategy_type")
-        
-        if st_type and st_type in preferences:
-            return preferences[st_type]["confidence"]
-        return 0.5 # Default neutral
-
-    # Check for meaningful ties in the top candidates
-    # We define a "tie" as scores within 0.05
-    tie_trace = None
-    
-    if len(sorted_frontier) >= 2:
-        top_1 = sorted_frontier[0]
-        top_2 = sorted_frontier[1]
-        
-        if abs(top_1.path_score - top_2.path_score) < 0.05:
-            # Tie detected!
-            score_diff = abs(top_1.path_score - top_2.path_score)
-            p1 = get_preference_score(top_1)
-            p2 = get_preference_score(top_2)
-            
-            tie_trace = {
-                "triggered": True,
-                "candidates": [
-                    {"content": top_1.content, "score": top_1.path_score, "pref_conf": p1},
-                    {"content": top_2.content, "score": top_2.path_score, "pref_conf": p2}
-                ],
-                "resolution": "Student Preference Model"
-            }
-            
-            # Re-sort using Tuple: (Path Score rounded, Preference Score, Original Score)
-            # This prioritizes Preference when Path Score is roughly equal
-            sorted_frontier = sorted(frontier, key=lambda x: (
-                round(x.path_score * 10), # Group into 0.1 buckets roughly
-                get_preference_score(x),
-                x.path_score
-            ), reverse=True)
-            
-            print(f"--- TIE BREAKING TRIGGERED: {top_1.content} vs {top_2.content} ---")
-
     beam = sorted_frontier[:CONFIG.beam_width]
     
-    new_state = {**state, "frontier": beam}
-    if tie_trace:
-        new_state["tie_break_trace"] = tie_trace
-        
-    return new_state
+    # Broadcast to Admin Dashboard
+    from server import sio
+    await sio.emit("tot_step", {
+        "step": "prune_frontier",
+        "beam_size": len(beam)
+    })
+    
+    return {**state, "frontier": beam}
 
 def check_stop_condition(state: AgentState) -> str:
     """
-    Conditional Logic: Continue or Stop?
+    Standard ToT stop condition.
     """
     frontier = state["frontier"]
-    best_node = state["best_node"]
-    
-    print(f"--- Check Stop: Depth {frontier[0].depth if frontier else '?'}, Best Score {best_node.path_score if best_node else 0} ---")
-    
     if not frontier:
-        return "finalize" # Dead end, return best so far
-        
+        return "finalize"
     current_depth = frontier[0].depth
-    
-    # 1. Max Depth
     if current_depth >= CONFIG.max_depth:
         return "finalize"
-        
-    # 2. Score Threshold (Early Exit)
-    # Only if we are at least depth 1 (have a strategy)
-    if best_node and best_node.path_score >= CONFIG.score_threshold and current_depth == CONFIG.max_depth:
-         return "finalize"
-         
     return "expand"
 
-def finalize_output(state: AgentState) -> AgentState:
+async def finalize_output(state: AgentState) -> AgentState:
     """
-    Node 5: Reconstructs path and output.
+    Node 5: Finalizes response and updates student memory.
     """
     print("--- Node: Finalize Output ---")
     best_node = state["best_node"]
@@ -534,81 +456,50 @@ def finalize_output(state: AgentState) -> AgentState:
     curr = best_node
     while curr:
         path.append(curr)
-        if curr.parent_id:
-            curr = tree_memory.get(curr.parent_id)
-        else:
-            curr = None
-    path.reverse() # Root -> Leaf
+        curr = tree_memory.get(curr.parent_id) if curr.parent_id else None
+    path.reverse()
     
-    # Construct reasoning trace
     trace = [f"[{n.depth}] {n.content} (Score: {n.path_score:.2f})" for n in path]
-    
-    # Final response is the content of the leaf
-    final_resp = best_node.content if best_node else "No suitable strategy found."
+    final_resp = best_node.content if best_node else "No strategy found."
     strategy_label = path[1].content if len(path) > 1 else "Unknown"
     
-    # Extract Policy Info from Strategy Node (Depth 1)
-    policy_id = "N/A"
-    policy_name = "N/A"
-    strategy_type = "visual_explanation" # Default
+    # Compute Outcome simulation
+    snapshot = state["context_data"]["snapshot"]
+    initial_affect = snapshot.get("current_affect", {})
+    initial_score = initial_affect.get("score", 0.5)
     
-    if len(path) > 1:
-        strategy_node = path[1]
-        policy_id = strategy_node.metadata.get("policy_id", "N/A")
-        policy_name = strategy_node.metadata.get("policy_name", "N/A")
-        strategy_type = strategy_node.metadata.get("strategy_type", "visual_explanation")
-
-    # COMPUTE OUTCOME & UPDATE PROFILE
-    # We need "previous" CV state. Since we don't have a real time loop in this script, 
-    # we'll simulate it by comparing 'test_cv_state' (initial) vs a 'final' state.
-    # In a real system, we'd persist the session.
-    # For now, we will Mock a "Post-Interaction" CV state to demonstrate the logic.
-    
-    initial_cv = state["context_data"]["cv"]
-    # Mock result: If strategy matched preference, improve engagement? 
-    # Or just random for now + logic?
-    # Let's derive it from the Node Score effectively. High Node Score -> likely good outcome.
-    
-    simulated_final_cv = initial_cv.copy()
+    simulated_final_score = initial_score
     if best_node and best_node.path_score > 0.8:
-        simulated_final_cv["engagement_score"] += 0.2
-        simulated_final_cv["engagement_state"] = "highly_engaged"
-    else:
-        simulated_final_cv["engagement_score"] -= 0.1
-        
-    outcome = compute_outcome(initial_cv, simulated_final_cv)
+        simulated_final_score = min(1.0, initial_score + 0.2)
     
-    # Update DB
+    # Simple outcome comparison
+    outcome = "Improved" if simulated_final_score > initial_score else "Stable"
+    
+    # Save Interaction
     memory = MemoryManager()
-    memory.update_learning_preference(
-        state["student_id"], 
-        strategy_type, 
-        outcome["success"]
-    )
-    
-    # Log Interaction
-    interaction_log = {
+    memory.save_interaction({
         "student_id": state["student_id"],
         "query": state["user_query"],
-        "strategy_label": strategy_label,
-        "strategy_type": strategy_type,
+        "strategy": strategy_label,
         "outcome": outcome,
-        "path_score": best_node.path_score if best_node else 0,
-        "tie_break": state.get("tie_break_trace")
-    }
-    memory.save_interaction(interaction_log)
+        "trace": trace
+    })
+
+    # Final broadcast to Admin Dashboard
+    from server import sio
+    await sio.emit("tot_final", {
+        "student_id": state["student_id"],
+        "final_response": final_resp,
+        "outcome": outcome,
+        "trace": trace
+    })
 
     return {
         **state,
         "final_response": final_resp,
         "reasoning_trace": trace,
-        "selected_strategy_label": strategy_label,
-        "policy_action_id": policy_id,
-        "policy_action_name": policy_name,
         "interaction_outcome": outcome
     }
-
-# --- Graph ---
 
 def create_tot_graph():
     workflow = StateGraph(AgentState)

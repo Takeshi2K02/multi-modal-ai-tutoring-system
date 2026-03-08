@@ -5,7 +5,7 @@ from agent_core.graph import create_tot_graph
 
 load_dotenv()
 
-def run_tot_demo():
+async def run_tot_demo():
     print("==================================================")
     print("      Agentic AI - Tree of Thought Planner        ")
     print("==================================================")
@@ -28,7 +28,7 @@ def run_tot_demo():
     
     try:
         # Use recursion_limit to allow for depth
-        result_1 = app.invoke(initial_state, config={"recursion_limit": 20})
+        result_1 = await app.ainvoke(initial_state, config={"recursion_limit": 20})
         print("\n[RESULT 1 Trace]")
         for trace in result_1.get("reasoning_trace", []):
             print(trace)
@@ -48,7 +48,7 @@ def run_tot_demo():
     }
     
     try:
-        result_2 = app.invoke(initial_state_2, config={"recursion_limit": 20})
+        result_2 = await app.ainvoke(initial_state_2, config={"recursion_limit": 20})
         print("\n[RESULT 2 Trace]")
         for trace in result_2.get("reasoning_trace", []):
             print(trace)
@@ -57,4 +57,5 @@ def run_tot_demo():
         print(f"Error S2: {e}")
 
 if __name__ == "__main__":
-    run_tot_demo()
+    import asyncio
+    asyncio.run(run_tot_demo())

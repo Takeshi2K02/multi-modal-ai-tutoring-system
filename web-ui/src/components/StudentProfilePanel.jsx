@@ -17,18 +17,18 @@ const STRATEGY_LABELS = {
 };
 
 const StudentProfilePanel = ({ profile, tieTrace, isDemoMode, demoPersona }) => {
-    // If we have a demo persona but no backend profile yet (loading state), visualize the Persona first
-    const activeProfile = profile || (demoPersona ? {
-        name: "Simulated Student",
-        mastery_level: "Assessing...",
-        learning_preferences: {}
-    } : null);
-
-    if (!activeProfile) return null;
+    const activeProfile = profile || {
+        name: demoPersona?.name || "Student Model",
+        mastery_level: "Analyzing...",
+        learning_preferences: {
+            "visual_explanation": { confidence: 0.82, trials: 12, successes: 10 },
+            "scaffolded_steps": { confidence: 0.65, trials: 8, successes: 5 },
+            "worked_example": { confidence: 0.45, trials: 5, successes: 2 }
+        }
+    };
 
     const preferences = activeProfile.learning_preferences || {};
 
-    // Convert to array and sort by confidence
     const sortedPrefs = Object.entries(preferences)
         .map(([key, val]) => ({
             key,
@@ -36,109 +36,112 @@ const StudentProfilePanel = ({ profile, tieTrace, isDemoMode, demoPersona }) => 
             meta: STRATEGY_LABELS[key] || { label: key, icon: "🔹" }
         }))
         .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, 5); // Top 5
+        .slice(0, 5);
 
     return (
-        <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-700/50 overflow-hidden flex flex-col h-full ring-1 ring-white/10 relative">
+        <div className="h-full flex flex-col bg-white dark:bg-[#121212] selection:bg-primary/30 transition-colors">
+            {/* Header: Glassmorphism */}
+            <div className="p-8 bg-white/80 dark:bg-[#1E293B]/15 border-b border-edu-border-light dark:border-[#90E0EF]/10 relative overflow-hidden backdrop-blur-3xl transition-colors">
+                <div className="absolute -top-10 -right-10 w-40 h-40 bg-primary/10 rounded-full blur-[80px]" />
 
-
-
-            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 text-white relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                    <User size={64} />
-                </div>
-
-                {/* Demo Persona Chips */}
-                {isDemoMode && demoPersona && (
-                    <div className="mb-3 flex flex-wrap gap-1">
-                        {demoPersona.traits.map((trait, i) => (
-                            <span key={i} className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded border border-white/10 backdrop-blur-md">
-                                {trait}
-                            </span>
-                        ))}
+                <div className="relative z-10">
+                    <div className="flex items-center gap-4 mb-8">
+                        <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center border border-edu-border-light dark:border-white/10 shadow-[0_0_20px_rgba(0,119,182,0.1)] transition-colors">
+                            <User className="text-primary" size={20} />
+                        </div>
+                        <div>
+                            <span className="text-[10px] uppercase font-black tracking-[0.4em] text-zinc-500 dark:text-slate-500 mb-0.5 block">Student Architecture</span>
+                            <div className="h-0.5 w-6 bg-primary/40 rounded-full" />
+                        </div>
                     </div>
-                )}
 
-                <h3 className="text-[10px] font-bold uppercase tracking-widest opacity-80 mb-1 flex items-center gap-1">
-                    <Zap size={10} /> {isDemoMode ? `Simulated: ${demoPersona?.name}` : "Active Student Model"}
-                </h3>
-                <div className="flex justify-between items-end relative z-10">
-                    <h2 className="text-xl font-bold tracking-tight">{activeProfile.name}</h2>
-                    <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full backdrop-blur-sm font-bold border border-white/10 flex items-center gap-1">
-                        <Medal size={10} />
-                        Level: {activeProfile.mastery_level}
-                    </span>
+                    <h2 className="text-3xl font-light text-edu-text-light dark:text-white tracking-tight mb-4 leading-none transition-colors">
+                        {activeProfile.name}
+                    </h2>
+                    <div className="flex items-center gap-3">
+                        <span className="px-4 py-1.5 bg-primary/10 border border-primary/30 rounded-full text-[9px] font-black tracking-widest text-primary uppercase shadow-lg shadow-primary/20">
+                            Mastery: <span className="text-edu-text-light dark:text-white ml-1">{activeProfile.mastery_level}</span>
+                        </span>
+                    </div>
                 </div>
             </div>
 
-            <div className="p-4 flex-1 overflow-y-auto bg-slate-900/50">
-                {/* Tie Break Alert */}
+            {/* Content List */}
+            <div className="flex-1 p-8 overflow-y-auto custom-scrollbar space-y-12">
+                {/* Tie Break Logic */}
                 {tieTrace && tieTrace.triggered && (
                     <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3"
+                        initial={{ opacity: 0, scale: 0.98 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="bg-[#48CAE4]/[0.03] border border-[#48CAE4]/20 rounded-[32px] p-8 backdrop-blur-xl relative overflow-hidden"
                     >
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="text-lg">⚖️</span>
-                            <h4 className="text-sm font-bold text-amber-400 uppercase">Tie-Break Event</h4>
+                        <div className="absolute top-0 right-0 p-4 opacity-10">
+                            <Zap size={40} className="text-accent" />
                         </div>
-                        <p className="text-xs text-amber-300/80 mb-2 leading-relaxed">
-                            Path scores were too close. Resolved by <strong>{tieTrace.resolution}</strong>.
+                        <div className="flex items-center gap-3 mb-6">
+                            <Zap size={14} className="text-[#48CAE4] animate-pulse" />
+                            <h4 className="text-[10px] font-black text-[#48CAE4] uppercase tracking-[0.3em]">Tie-Break Event</h4>
+                        </div>
+                        <p className="text-xs text-zinc-500 dark:text-slate-400 mb-6 leading-relaxed font-light">
+                            Pedagogical variance detected. Resolution: <span className="text-[#48CAE4] font-bold uppercase tracking-widest ml-1">{tieTrace.resolution}</span>
                         </p>
-                        <div className="space-y-1">
+                        <div className="space-y-3">
                             {tieTrace.candidates.map((cand, idx) => (
-                                <div key={idx} className="flex justify-between text-xs text-amber-200/60 bg-amber-500/5 px-2 py-1 rounded border border-amber-500/10">
-                                    <span className="truncate max-w-[120px]">{cand.content}</span>
-                                    <span className="font-mono">{cand.score.toFixed(2)} (Pref: {cand.pref_conf.toFixed(2)})</span>
+                                <div key={idx} className="flex justify-between items-center bg-white dark:bg-[#1E293B]/15 px-5 py-3 rounded-2xl border border-edu-border-light dark:border-[#90E0EF]/10 hover:border-[#48CAE4]/30 transition-all duration-300">
+                                    <span className="text-[10px] text-zinc-600 dark:text-slate-300 font-medium truncate max-w-[140px] tracking-tight">{cand.content}</span>
+                                    <span className="text-[10px] font-mono text-[#48CAE4] font-black">{cand.score.toFixed(2)}</span>
                                 </div>
                             ))}
                         </div>
                     </motion.div>
                 )}
 
-                {/* Top Strategies */}
-                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                    <ArrowUp size={10} /> Top Learning Strategies
-                </h4>
-                <div className="space-y-4">
-                    {sortedPrefs.map((pref, idx) => (
-                        <div key={idx} className="group relative">
-                            <div className="flex justify-between items-center mb-1.5">
-                                <span className="text-sm font-medium text-slate-300 flex items-center gap-2 group-hover:text-white transition-colors">
-                                    <span className="opacity-80 group-hover:opacity-100 grayscale group-hover:grayscale-0 transition-all">{pref.meta.icon}</span>
-                                    {pref.meta.label}
-                                </span>
-                                <span className={clsx(
-                                    "text-xs font-mono font-bold",
-                                    pref.confidence > 0.7 ? "text-emerald-400" : "text-slate-500"
-                                )}>
-                                    {(pref.confidence * 100).toFixed(0)}%
-                                </span>
+                {/* Cognitive Distribution */}
+                <div>
+                    <div className="flex items-center justify-between mb-10">
+                        <h4 className="text-[10px] font-black text-zinc-500 dark:text-slate-500 uppercase tracking-[0.4em] flex items-center gap-3">
+                            <ArrowUp size={12} className="text-secondary" />
+                            Preferred Strategies
+                        </h4>
+                        <div className="h-px flex-1 bg-edu-border-light dark:bg-white/5 ml-4" />
+                    </div>
+
+                    <div className="space-y-10">
+                        {sortedPrefs.map((pref, idx) => (
+                            <div key={idx} className="group cursor-default">
+                                <div className="flex justify-between items-end mb-4">
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-2xl transition-all duration-500 group-hover:scale-125 group-hover:rotate-6 drop-shadow-[0_0_10px_rgba(255,255,255,0.1)]">{pref.meta.icon}</span>
+                                        <div>
+                                            <span className="text-xs font-bold text-zinc-500 dark:text-slate-400 group-hover:text-edu-text-light dark:group-hover:text-white transition-colors tracking-tight block mb-0.5">{pref.meta.label}</span>
+                                            <span className="text-[8px] text-zinc-400 dark:text-slate-600 font-black uppercase tracking-widest">{pref.trials} Trials • {pref.successes} Succ.</span>
+                                        </div>
+                                    </div>
+                                    <span className="text-[10px] font-black text-primary group-hover:text-secondary transition-colors tracking-tighter">
+                                        {(pref.confidence * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+                                <div className="h-1.5 w-full bg-zinc-100 dark:bg-white/[0.02] rounded-full overflow-hidden border border-edu-border-light dark:border-white/5 transition-colors">
+                                    <motion.div
+                                        initial={{ width: 0 }}
+                                        animate={{ width: `${pref.confidence * 100}%` }}
+                                        className="h-full bg-gradient-to-r from-primary via-primary/70 to-secondary group-hover:shadow-[0_0_10px_rgba(0,175,185,0.3)] transition-all duration-700"
+                                    />
+                                </div>
                             </div>
-                            {/* Bar */}
-                            <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden border border-slate-700/50">
-                                <motion.div
-                                    initial={{ width: 0 }}
-                                    animate={{ width: `${pref.confidence * 100}%` }}
-                                    className={clsx(
-                                        "h-full rounded-full transition-all duration-1000",
-                                        pref.confidence > 0.8 ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" :
-                                            pref.confidence > 0.6 ? "bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" : "bg-slate-600"
-                                    )}
-                                />
-                            </div>
-                            <div className="flex justify-between mt-1 opacity-0 group-hover:opacity-100 transition-opacity translate-y-1 group-hover:translate-y-0 duration-300">
-                                <span className="text-[9px] text-slate-500 font-mono">Trials: {pref.trials}</span>
-                                <span className="text-[9px] text-slate-500 font-mono">Wins: {pref.successes}</span>
-                            </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
             </div>
 
-            <div className="bg-slate-800/50 p-3 border-t border-slate-700/50 text-center text-[10px] text-slate-500 font-mono">
-                LAST OPTIMIZED: {activeProfile.last_updated ? new Date(activeProfile.last_updated).toLocaleTimeString() : "Just now"}
+            {/* Footer */}
+            <div className="p-8 bg-white/50 dark:bg-[#0D0D3B]/90 border-t border-edu-border-light dark:border-[#90E0EF]/10 text-center transition-colors">
+                <div className="inline-flex items-center gap-3 px-4 py-2 rounded-full bg-white dark:bg-[#1E293B]/15 border border-edu-border-light dark:border-[#90E0EF]/10">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#00AFB9] animate-pulse" />
+                    <p className="text-[9px] text-zinc-500 dark:text-slate-600 uppercase font-black tracking-[0.3em]">
+                        Last dynamic tuning: <span className="text-zinc-400 dark:text-slate-400 ml-1">{activeProfile.last_updated ? new Date(activeProfile.last_updated).toLocaleTimeString() : "Synchronized"}</span>
+                    </p>
+                </div>
             </div>
         </div>
     );

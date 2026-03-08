@@ -1,22 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { clsx } from 'clsx';
-import { LayoutDashboard, BookOpen, BrainCircuit, Upload, Layers, ChevronRight, User } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { LayoutDashboard, BookOpen, BrainCircuit, Upload, Layers, ChevronRight, ChevronLeft, User, Database, Camera, Bot } from 'lucide-react';
+import useSWR from 'swr';
+import { fetcher, API_BASE_URL } from './services/api';
 import TreeVisualizer from './components/Graph/TreeVisualizer';
 import ScenarioControls from './components/Sidebar/ScenarioControls';
 import StudentProfilePanel from './components/StudentProfilePanel';
 import SignalsPanel from './components/Graph/SignalsPanel';
 import LectureUpload from './pages/LectureUpload';
 import GoalDecomposition from './pages/GoalDecomposition';
-import LearningSession from './pages/LearningSession';
+import CurriculumBrowser from './pages/CurriculumBrowser';
+import LessonView from './pages/LessonView';
 import SessionDashboard from './pages/SessionDashboard';
 import Navbar from './components/Navbar';
 
-import ContentGeneration from './pages/ContentGeneration'; // New Import
+// import ContentGeneration from './pages/ContentGeneration'; // Replaced by LessonView
+import AdminMonitor from './components/AdminMonitor';
+import DataDashboard from './pages/DataDashboard';
+import LearningLayout from './components/LearningLayout';
+import LiveAffectSensing from './components/LiveAffectSensing';
+import { ThemeProvider } from './context/ThemeContext';
 
 function App() {
   const [view, setView] = useState('decomposition'); // Default: 'decomposition'
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [currentTopicContext, setCurrentTopicContext] = useState(null);
+  const [isLessonReady, setIsLessonReady] = useState(false);
   const [contentGenRequest, setContentGenRequest] = useState(null); // New State
   const [countdown, setCountdown] = useState(0); // New State
 
@@ -24,11 +34,13 @@ function App() {
   useEffect(() => {
     const titles = {
       decomposition: 'EduSynth - Plan',
-      session: 'EduSynth - Learning',
+      curriculum: 'EduSynth - Curriculum',
+      lesson: 'EduSynth - Lesson',
       dashboard: 'EduSynth - My Learning',
       agent: 'EduSynth - Agent View',
       upload: 'EduSynth - Upload',
-      'content-generation': 'EduSynth - Content Gen' // New Title
+      monitor: 'EduSynth - Admin Monitor',
+      data: 'EduSynth - Data Center'
     };
     document.title = titles[view] || 'EduSynth AI Tutor';
   }, [view]);
@@ -47,6 +59,15 @@ function App() {
   // Demo Mode State
   const [demoPersona, setDemoPersona] = useState(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
+
+  // 1. Analytics Data Hooks
+  const { data: analytics } = useSWR(`${API_BASE_URL}/api/analytics/historical?user_id=alex_123`, fetcher);
+  const { data: latest } = useSWR(`${API_BASE_URL}/api/analytics/latest?user_id=alex_123`, fetcher, { refreshInterval: 2000 });
+
+  const cvStats = analytics?.cv_stats || {};
+  const rlStats = analytics?.rl_stats || {};
+  const latestCv = latest?.cv || {};
+  const latestRl = latest?.rl || {};
 
   // MOCK PERSONAS for Demo with extended data
   const MOCK_PERSONAS = [
@@ -136,10 +157,16 @@ function App() {
     // Construct Payload
     if (!outcome || !demoPersona) return;
 
-    // Simulate deriving spec from outcome (assuming outcome format from backend)
-    // We map the tree outcome to the requested JSON structure
+    // Find the directive from the best node in the ToT graph
+    const bestNodeId = outcome.meta?.best_path_ids?.[outcome.meta.best_path_ids.length - 1];
+    const bestNode = outcome.nodes?.find(n => n.id === bestNodeId);
+    const directive = bestNode?.data?.directive || {
+      type: "explanation",
+      content: outcome.meta?.final_response || "No structured content available."
+    };
+
     const requestPayload = {
-      topic: currentTopicContext || { title: "Introduction to Calculus", id: "calc_101" }, // Fallback if context missing
+      topic: currentTopicContext || { title: "Introduction to Calculus", id: "calc_101" },
       studentPersona: {
         id: demoPersona.id,
         name: demoPersona.name,
@@ -153,6 +180,7 @@ function App() {
         format: "Interactive Module",
         stepPlan: ["Intro", "Concept", "Practice"]
       },
+      directive, // Pass the structured ToT output
       difficultySignal: {
         reason: demoPersona.state,
         evidence: {
@@ -193,21 +221,37 @@ function App() {
             onBack={() => setView('agent')} // Optional Link
             onStart={(sessionId) => {
               setActiveSessionId(sessionId);
-              setView('session');
+              setView('dashboard'); // Navigate to "My Knowledge Paths" view
             }}
           />
         );
 
-      case 'session':
-        if (!activeSessionId) return <div className='p-10 text-slate-500'>No active session selected.</div>;
+      case 'curriculum':
+        if (!activeSessionId) return <div className='p-10 text-zinc-500'>No active session selected.</div>;
         return (
-          <LearningSession
+          <CurriculumBrowser
             sessionId={activeSessionId}
             onBack={() => setView('dashboard')}
-            onStartLearning={(topic) => {
+            onContinue={(topic) => {
               setCurrentTopicContext(topic);
-              setView('agent');
+              setIsLessonReady(false); // Reset for next lesson
+              setView('lesson');
             }}
+          />
+        );
+
+      case 'lesson':
+        if (!activeSessionId || !currentTopicContext) return <div className='p-10 text-zinc-500'>Module data missing.</div>;
+        return (
+          <LessonView
+            key={currentTopicContext?.id || currentTopicContext?.title || 'active-module'}
+            sessionId={activeSessionId}
+            topic={currentTopicContext}
+            onBack={() => {
+              setIsLessonReady(false);
+              setView('curriculum');
+            }}
+            onReady={() => setIsLessonReady(true)}
           />
         );
 
@@ -217,72 +261,74 @@ function App() {
             onBack={() => setView('decomposition')}
             onResume={(sessId) => {
               setActiveSessionId(sessId);
-              setView('session');
+              setView('curriculum');
             }}
           />
         );
 
       case 'upload':
-        return <LectureUpload onBack={() => setView('decomposition')} />;
-
-      case 'content-generation': // New View
         return (
-          <ContentGeneration
-            request={contentGenRequest}
-            onBack={() => setView('agent')}
-            onStartLearning={() => {
-              // Start a new session or go to dashboard
-              // For demo, loop back to dashboard or session
-              setView('dashboard');
-            }}
+          <LectureUpload
+            onBack={() => setView('decomposition')}
+            onSuccess={() => setView('decomposition')}
           />
         );
 
+      case 'monitor':
+        return <AdminMonitor />;
+
+      case 'data':
+        return <DataDashboard />;
+
       case 'agent':
         return (
-          <div className="flex h-full w-full relative overflow-hidden bg-slate-950">
+          <div className="flex h-full w-full relative overflow-hidden bg-zinc-950 dark:bg-edu-bg-dark selection:bg-primary/30 transition-colors">
 
-            {/* LEFT EDGE BUTTON (Profile) */}
+            {/* LEFT EDGE TOGGLE (Student Profile) */}
             <button
               onClick={() => setShowProfile(!showProfile)}
-              className={`absolute left-0 top-1/2 -translate-y-1/2 z-50 py-8 px-1.5 rounded-r-xl border-y border-r border-slate-700/50 shadow-xl transition-all duration-300 flex flex-col items-center gap-2 ${showProfile ? 'bg-slate-800 text-white left-80 translate-x-[-1px]' : 'bg-slate-900/80 text-slate-500 hover:text-white hover:bg-slate-800 backdrop-blur'
+              className={`absolute top-1/2 -translate-y-1/2 z-50 py-10 px-2 rounded-r-2xl border-y border-r border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-all duration-500 flex flex-col items-center gap-4 ${showProfile ? 'left-80' : 'left-0'
+                } ${showProfile ? 'bg-white/60 dark:bg-[#1E293B]/20 text-edu-text-light dark:text-edu-text-dark backdrop-blur-3xl' : 'bg-edu-surface-light dark:bg-[#1E293B]/60 text-primary backdrop-blur hover:bg-edu-bg-light dark:hover:bg-[#1E293B]/80'
                 }`}
-              style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
             >
-              <div className="rotate-180 transform">{showProfile ? <ChevronRight size={14} /> : <User size={14} />}</div>
-              <span className="text-[10px] font-bold uppercase tracking-widest mt-2">{showProfile ? 'Close' : 'Student'}</span>
+              <div className="flex flex-col items-center gap-4">
+                {showProfile ? <ChevronLeft size={16} /> : <User size={18} />}
+                <span className="text-[10px] font-black uppercase tracking-[0.3em] [writing-mode:vertical-lr] rotate-180">
+                  {showProfile ? 'Close' : 'Student'}
+                </span>
+              </div>
             </button>
 
 
-            {/* LEFT PANEL (Push) */}
-            <div className={`h-full transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${showProfile ? 'w-80 border-r border-slate-800' : 'w-0 border-none'} overflow-hidden bg-slate-900 relative z-40 shrink-0`}>
-              <div className="w-80 h-full p-0">
-                <StudentProfilePanel
-                  profile={outcome?.meta?.profile}
-                  tieBreakTrace={outcome?.meta?.tie_break_trace}
-                  isDemoMode={isDemoMode}
-                  demoPersona={demoPersona}
-                />
-              </div>
+            {/* LEFT PANEL (Overlay) */}
+            <div className={`absolute top-0 left-0 h-full transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${showProfile ? 'w-80 translate-x-0' : 'w-80 -translate-x-full'} z-40 bg-white/95 dark:bg-[#1E293B]/15 backdrop-blur-3xl border-r border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-colors`}>
+              <StudentProfilePanel
+                profile={outcome?.meta?.profile || {
+                  name: "Alex (Real)",
+                  mastery_level: "Sophomore",
+                  learning_preferences: analytics?.preferences || {}
+                }}
+                tieTrace={outcome?.meta?.tie_break_trace}
+                isDemoMode={isDemoMode}
+                demoPersona={demoPersona}
+              />
             </div>
 
-            {/* CENTER GRAPH (Flexible) */}
-            <div className="flex-1 relative h-full dots-pattern bg-slate-950 z-10 transition-all duration-300">
+            {/* CENTER GRAPH (Centered) */}
+            <div className="flex-1 relative h-full dots-pattern bg-edu-bg-light dark:bg-edu-bg-dark z-10 transition-colors duration-300">
               <TreeVisualizer
                 data={graphData}
                 onAnimationComplete={() => {
-                  // Only trigger if we have an outcome and aren't already generating
                   if (graphData && !contentGenRequest) {
                     handleSimulationComplete();
                   }
                 }}
               />
-
               {!graphData && !loading && !error && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                   <div className="text-center space-y-4 opacity-30">
-                    <div className="text-6xl grayscale">🌲</div>
-                    <div className="text-xl font-light text-slate-500">
+                    <div className="text-6xl grayscale filter contrast-125">🌲</div>
+                    <div className="text-xl font-light text-zinc-500 dark:text-slate-500">
                       Agent Visualizer
                       <br />
                       <span className="text-base">Waiting for simulation...</span>
@@ -293,95 +339,81 @@ function App() {
 
               {/* Status Overlay & Countdown */}
               {countdown > 0 && (
-                <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-indigo-900/90 text-white backdrop-blur-md px-6 py-3 rounded-full shadow-2xl border border-indigo-500/50 flex items-center gap-4 z-50 animate-in fade-in slide-in-from-top-4">
+                <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-primary dark:bg-primary/90 text-white backdrop-blur-md px-6 py-3 rounded-full shadow-2xl border border-primary/20 dark:border-primary/50 flex items-center gap-4 z-50 animate-in fade-in slide-in-from-top-4 transition-all">
                   <div className="relative w-5 h-5">
                     <svg className="w-full h-full -rotate-90">
-                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" className="text-indigo-900" />
-                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="50" strokeDashoffset={50 - (50 * countdown) / 10} className="text-emerald-400 transition-all duration-1000 ease-linear" />
+                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary-dark opacity-30" />
+                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="50" strokeDashoffset={50 - (50 * countdown) / 10} className="text-secondary transition-all duration-1000 ease-linear" />
                     </svg>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-300">Simulation Complete</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-white/70">Simulation Complete</span>
                     <span className="text-sm font-medium">Preparing learning content... {countdown}s</span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* RIGHT PANEL (Push) - Transparent Container with Vertical 50/50 Zones */}
-            {/* The logic: If EITHER is open, the container provides 72w width. 
-                Inside, we have two 50% height zones. 
-                If a card is closed, it fades out/scales down but the zone remains reserved (or empties out).
-                User requested "Stack vertically with gap" if both open. 
-                This implementation uses fixed 50/50 zones to ensure perfect alignment with the 25%/75% buttons.
-            */}
-            <div className={`h-full transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${showCV || showRL ? 'w-72 border-none' : 'w-0 border-none'} overflow-hidden relative z-40 shrink-0`}>
-              <div className="w-72 h-full flex flex-col bg-slate-950/20 backdrop-blur-sm">
-
-                {/* Top Zone (CV) - 50% Height to align with Toggle */}
-                <div className="h-1/2 w-full p-4 flex items-center justify-center relative">
-                  <div className={`w-full max-h-full flex flex-col rounded-2xl border bg-slate-900 shadow-2xl overflow-hidden transition-all duration-300 ${showCV ? 'opacity-100 scale-100 border-emerald-500/30' : 'opacity-0 scale-95 border-transparent pointer-events-none absolute'} relative z-50`}>
-                    {/* Header */}
-                    <div className="bg-slate-950/80 p-3 border-b border-emerald-500/20 flex items-center justify-between">
-                      <h3 className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-2">
-                        <span>📷</span> CV Input
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-                        <button onClick={() => setShowCV(false)} className="text-slate-500 hover:text-white transition-colors">
-                          <span className="sr-only">Close</span>
-                          <ChevronRight size={14} className="rotate-0 hover:rotate-90 transition-transform" />
-                        </button>
-                      </div>
+            {/* RIGHT PANEL (Overlay) */}
+            <div className={`absolute top-0 right-0 h-full transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${showCV || showRL ? 'w-80 translate-x-0' : 'w-80 translate-x-full'} z-40 bg-white/95 dark:bg-[#1E293B]/15 backdrop-blur-3xl border-l border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-colors`}>
+              <div className="h-full flex flex-col p-4 gap-4">
+                {/* CV Panel Fragment */}
+                <div className={`flex-1 transition-all duration-500 ${showCV ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+                  <div className="h-full flex flex-col rounded-[32px] border border-secondary/20 bg-zinc-50 dark:bg-white/[0.02] overflow-hidden shadow-sm dark:shadow-none transition-colors">
+                    <div className="p-4 border-b border-edu-border-light dark:border-white/5 flex justify-between items-center bg-secondary/5 transition-colors">
+                      <span className="text-[10px] font-black tracking-widest text-secondary uppercase transition-colors">CV ANALYTICS</span>
+                      <button onClick={() => setShowCV(false)}><ChevronRight size={14} className="text-zinc-400 dark:text-slate-500 transition-colors" /></button>
                     </div>
-                    {/* Body */}
-                    <div className="p-3 overflow-y-auto custom-scrollbar">
-                      {demoPersona?.cv_data ? (
-                        <div className="space-y-2">
-                          {Object.entries(demoPersona.cv_data).map(([k, v]) => (
-                            <div key={k} className="bg-slate-950/40 p-2 rounded-lg border border-slate-800/60 flex flex-col">
-                              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">{k}</span>
-                              <span className="text-xs font-mono text-emerald-100/90">{v}</span>
-                            </div>
-                          ))}
+                    <div className="p-4 overflow-y-auto custom-scrollbar">
+                      <div className="space-y-6">
+                        <div className="p-4 bg-white dark:bg-white/[0.01] rounded-2xl border border-edu-border-light dark:border-white/5 group hover:border-secondary/30 transition-all duration-300">
+                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block mb-1 font-black tracking-widest uppercase transition-colors">Latest Engagement</span>
+                          <span className="text-3xl font-mono text-secondary transition-colors">{latestCv.engagement_score || '0.00'}</span>
                         </div>
-                      ) : <div className="text-xs text-slate-500 italic p-2">No active signal</div>}
+                        <div className="space-y-3">
+                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block font-black tracking-widest uppercase transition-colors">Current Affect</span>
+                          <div className="p-4 bg-secondary/5 rounded-[24px] border border-secondary/20 flex justify-between items-center group transition-all duration-500">
+                            <span className="text-lg font-light text-edu-text-light dark:text-secondary-100 capitalize tracking-tight transition-colors">{latestCv.emotion || 'Neutral'}</span>
+                            <div className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse shadow-[0_0_12px_rgba(16,185,129,0.5)] transition-colors" />
+                          </div>
+                          <div className="text-[9px] font-mono text-zinc-400 dark:text-slate-600 text-right opacity-50 transition-colors">
+                            SIGNAL SYNCED: {latestCv.timestamp ? new Date(latestCv.timestamp).toLocaleTimeString() : 'Awaiting...'}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Bottom Zone (RL) - 50% Height to align with Toggle */}
-                <div className="h-1/2 w-full p-4 flex items-center justify-center relative border-t border-slate-800/0">
-                  <div className={`w-full max-h-full flex flex-col rounded-2xl border bg-slate-900 shadow-2xl overflow-hidden transition-all duration-300 ${showRL ? 'opacity-100 scale-100 border-indigo-500/30' : 'opacity-0 scale-95 border-transparent pointer-events-none absolute'} relative z-50`}>
-                    {/* Header */}
-                    <div className="bg-slate-950/80 p-3 border-b border-indigo-500/20 flex items-center justify-between">
-                      <h3 className="text-[10px] font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-2">
-                        <span>🤖</span> RL Policy
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                        <button onClick={() => setShowRL(false)} className="text-slate-500 hover:text-white transition-colors">
-                          <span className="sr-only">Close</span>
-                          <ChevronRight size={14} className="rotate-0 hover:rotate-90 transition-transform" />
-                        </button>
-                      </div>
+                {/* RL Panel Fragment */}
+                <div className={`flex-1 transition-all duration-500 ${showRL ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
+                  <div className="h-full flex flex-col rounded-[32px] border border-primary/20 bg-zinc-50 dark:bg-white/[0.02] overflow-hidden shadow-sm dark:shadow-none transition-colors">
+                    <div className="p-4 border-b border-edu-border-light dark:border-white/5 flex justify-between items-center bg-primary/5 transition-colors">
+                      <span className="text-[10px] font-black tracking-widest text-primary uppercase transition-colors">RL STRATEGY</span>
+                      <button onClick={() => setShowRL(false)}><ChevronRight size={14} className="text-zinc-400 dark:text-slate-500 transition-colors" /></button>
                     </div>
-                    {/* Body */}
-                    <div className="p-3 overflow-y-auto custom-scrollbar">
-                      {demoPersona?.rl_data ? (
-                        <div className="space-y-2">
-                          {Object.entries(demoPersona.rl_data).map(([k, v]) => (
-                            <div key={k} className="bg-slate-950/40 p-2 rounded-lg border border-slate-800/60 flex flex-col">
-                              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">{k}</span>
-                              <span className="text-xs font-mono text-indigo-100/90">{v}</span>
-                            </div>
-                          ))}
+                    <div className="p-4 overflow-y-auto custom-scrollbar">
+                      <div className="space-y-6">
+                        <div className="p-4 bg-white dark:bg-white/[0.01] rounded-2xl border border-edu-border-light dark:border-white/5 group hover:border-primary/30 transition-all duration-300">
+                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block mb-1 font-black tracking-widest uppercase transition-colors">Strategy Confidence</span>
+                          <span className="text-3xl font-mono text-primary transition-colors">{latestRl.confidence ? (latestRl.confidence * 100).toFixed(0) + '%' : '0%'}</span>
                         </div>
-                      ) : <div className="text-xs text-slate-500 italic p-2">No active signal</div>}
+                        <div className="space-y-3">
+                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block font-black tracking-widest uppercase transition-colors">Deciding Policy</span>
+                          <div className="p-4 bg-primary/5 rounded-[24px] border border-primary/20 group transition-all duration-500">
+                            <span className="text-sm font-medium text-edu-text-light dark:text-primary-100 capitalize mb-1 block transition-colors">{latestRl.action || 'Idle'}</span>
+                            <span className="text-[10px] text-zinc-500 dark:text-slate-500 line-clamp-2 italic font-light leading-relaxed transition-colors">
+                              {latestRl.reasoning || "Observing student patterns for optimal intervention path."}
+                            </span>
+                          </div>
+                          <div className="text-[9px] font-mono text-zinc-400 dark:text-slate-600 text-right opacity-50 transition-colors">
+                            POLICY UPDATED: {latestRl.timestamp ? new Date(latestRl.timestamp).toLocaleTimeString() : 'Awaiting...'}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
-
               </div>
             </div>
 
@@ -390,25 +422,31 @@ function App() {
             {/* CV Toggle (Top Quarter) */}
             <button
               onClick={() => setShowCV(!showCV)}
-              className={`absolute top-[25%] -translate-y-1/2 z-50 py-6 px-1.5 rounded-l-xl border-y border-l border-slate-700/50 shadow-xl transition-all duration-300 flex flex-col items-center gap-2 ${showCV || showRL ? 'right-72 translate-x-[1px]' : 'right-0'
-                } ${showCV ? 'bg-slate-800 text-white' : 'bg-slate-900/80 text-emerald-500/70 hover:text-emerald-400 hover:bg-slate-800 backdrop-blur'
+              className={`absolute top-[30%] -translate-y-1/2 z-50 py-8 px-2 rounded-l-2xl border-y border-l border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-all duration-300 flex flex-col items-center gap-4 ${showCV || showRL ? 'right-80' : 'right-0'
+                } ${showCV ? 'bg-white/60 dark:bg-[#1E293B]/15 text-secondary backdrop-blur-3xl' : 'bg-edu-surface-light dark:bg-[#1E293B]/40 text-secondary/70 hover:text-secondary hover:bg-edu-bg-light dark:hover:bg-[#1E293B]/60 backdrop-blur'
                 }`}
-              style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
             >
-              <div className="rotate-180 transform">{showCV ? <ChevronRight size={14} /> : <span className="text-lg">📷</span>}</div>
-              <span className="text-[10px] font-bold uppercase tracking-widest mt-2">{showCV ? 'Close' : 'CV Input'}</span>
+              <div className="flex flex-col items-center gap-4">
+                {showCV ? <ChevronRight size={16} /> : <Camera size={18} />}
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] [writing-mode:vertical-lr] rotate-180">
+                  {showCV ? 'Close' : 'CV Input'}
+                </span>
+              </div>
             </button>
 
             {/* RL Toggle (Bottom Quarter) */}
             <button
               onClick={() => setShowRL(!showRL)}
-              className={`absolute top-[75%] -translate-y-1/2 z-50 py-6 px-1.5 rounded-l-xl border-y border-l border-slate-700/50 shadow-xl transition-all duration-300 flex flex-col items-center gap-2 ${showCV || showRL ? 'right-72 translate-x-[1px]' : 'right-0'
-                } ${showRL ? 'bg-slate-800 text-white' : 'bg-slate-900/80 text-indigo-500/70 hover:text-indigo-400 hover:bg-slate-800 backdrop-blur'
+              className={`absolute top-[70%] -translate-y-1/2 z-50 py-8 px-2 rounded-l-2xl border-y border-l border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-all duration-300 flex flex-col items-center gap-4 ${showCV || showRL ? 'right-80' : 'right-0'
+                } ${showRL ? 'bg-white/60 dark:bg-[#1E293B]/15 text-primary backdrop-blur-3xl' : 'bg-edu-surface-light dark:bg-[#1E293B]/40 text-primary/70 hover:text-primary hover:bg-edu-bg-light dark:hover:bg-[#1E293B]/60 backdrop-blur'
                 }`}
-              style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
             >
-              <div className="rotate-180 transform">{showRL ? <ChevronRight size={14} /> : <span className="text-lg">🤖</span>}</div>
-              <span className="text-[10px] font-bold uppercase tracking-widest mt-2">{showRL ? 'Close' : 'RL Input'}</span>
+              <div className="flex flex-col items-center gap-4">
+                {showRL ? <ChevronRight size={16} /> : <Bot size={18} />}
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] [writing-mode:vertical-lr] rotate-180">
+                  {showRL ? 'Close' : 'RL Input'}
+                </span>
+              </div>
             </button>
 
           </div>
@@ -420,15 +458,41 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-950 text-slate-50 overflow-hidden font-sans">
-      {/* Global Navbar */}
-      <Navbar currentView={view} onViewChange={setView} />
+    <ThemeProvider>
+      <div className="flex flex-col h-screen w-screen bg-edu-bg-light dark:bg-edu-bg-dark text-edu-text-light dark:text-edu-text-dark transition-colors duration-300 overflow-hidden font-sans">
+        {/* Global Live CV Monitor - Survives sub-component crashes */}
+        <LiveAffectSensing
+          key={view === 'lesson' ? `cv-${currentTopicContext?.id || 'active'}` : 'cv-idle'}
+          userId="student_001"
+          materialId={currentTopicContext?.title || "generic_topic"}
+          enabled={view === 'lesson'}
+        />
 
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-hidden relative">
-        {renderContent()}
+        {/* Global Navbar - Elevated Z-Index */}
+        <div className="z-[100] relative">
+          <Navbar currentView={view} onViewChange={setView} />
+        </div>
+
+        {/* Spacer ensures Navbar is cleared globally across all pages */}
+        <div className="h-[110px] w-full shrink-0" />
+
+        {/* Main Content Area */}
+        <div className="flex-1 overflow-hidden relative">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={view}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: "easeInOut" }}
+              className="h-full w-full"
+            >
+              {renderContent()}
+            </motion.div>
+          </AnimatePresence>
+        </div>
       </div>
-    </div>
+    </ThemeProvider>
   );
 }
 

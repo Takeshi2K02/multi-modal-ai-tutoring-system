@@ -1,84 +1,119 @@
 import React, { useState } from 'react';
-import { BrainCircuit, Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap, Upload } from 'lucide-react';
+import { BrainCircuit, Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap, Upload, Activity, Database } from 'lucide-react';
+import ThemeToggle from './ThemeToggle';
 
 const Navbar = ({ onViewChange, currentView }) => {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     const navItems = [
-        { id: 'decomposition', label: 'New Goal', icon: <Layers size={18} /> },
-        { id: 'upload', label: 'Upload', icon: <Upload size={18} /> },
-        { id: 'dashboard', label: 'My Learning', icon: <LayoutDashboard size={18} /> },
-        { id: 'agent', label: 'Agent Debugger', icon: <BrainCircuit size={18} /> },
+        { id: 'decomposition', label: 'New Goal', icon: <Layers size={16} strokeWidth={1.5} /> },
+        { id: 'upload', label: 'Upload', icon: <Upload size={16} strokeWidth={1.5} /> },
+        { id: 'dashboard', label: 'My Learning', icon: <LayoutDashboard size={16} strokeWidth={1.5} /> },
+        { id: 'agent', label: 'Agent Debugger', icon: <BrainCircuit size={16} strokeWidth={1.5} /> },
+        { id: 'monitor', label: 'Live Monitor', icon: <Activity size={16} strokeWidth={1.5} /> },
+        { id: 'data', label: 'Data', icon: <Database size={16} strokeWidth={1.5} /> },
     ];
 
     return (
-        <nav className="sticky top-0 z-50 w-full bg-slate-950/80 backdrop-blur-md border-b border-slate-800">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div className="flex justify-between items-center h-16">
-                    {/* Logo */}
-                    <div className="flex-shrink-0 flex items-center gap-2 cursor-pointer" onClick={() => onViewChange('decomposition')}>
-                        <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-                            <GraduationCap className="text-white" size={20} />
-                        </div>
-                        <span className="font-bold text-xl tracking-tight text-white">
-                            Edu<span className="text-indigo-400">Synth</span>
-                        </span>
-                    </div>
+        <nav className="fixed top-6 left-0 right-0 z-[100] flex justify-center px-4 pointer-events-none">
+            <div className="flex items-center gap-2 bg-white/80 dark:bg-[#121212]/70 backdrop-blur-xl border border-edu-border-light dark:border-[#6366F1]/20 px-2 py-1.5 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.4)] pointer-events-auto transition-all duration-500 hover:border-edu-border-light/50 dark:hover:border-[#6366F1]/40">
 
-                    {/* Desktop Menu */}
-                    <div className="hidden md:flex space-x-1">
-                        {navItems.map((item) => (
-                            <button
-                                key={item.id}
-                                onClick={() => onViewChange(item.id)}
-                                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${currentView === item.id
-                                    ? 'bg-slate-800 text-white shadow-sm ring-1 ring-slate-700'
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-                                    }`}
-                            >
+                {/* Logo Section */}
+                <div
+                    className="flex items-center gap-2 px-4 py-2 cursor-pointer group"
+                    onClick={() => onViewChange('decomposition')}
+                >
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-[#0077B6] to-[#48CAE4] flex items-center justify-center shadow-lg shadow-[#0077B6]/10 group-hover:scale-105 transition-transform duration-300">
+                        <GraduationCap className="text-white" size={16} />
+                    </div>
+                    <span className="font-medium text-sm tracking-tight text-edu-text-light dark:text-white/90">
+                        EduSynth
+                    </span>
+                </div>
+
+                <div className="h-4 w-[1px] bg-edu-border-light dark:bg-white/10 mx-1" />
+
+                {/* Desktop Menu */}
+                <div className="hidden md:flex items-center gap-1">
+                    {navItems.map((item) => (
+                        <button
+                            key={item.id}
+                            onClick={() => onViewChange(item.id)}
+                            className={`px-4 py-2 rounded-full text-[13px] font-medium transition-all duration-300 flex items-center gap-2 group relative overflow-hidden ${currentView === item.id
+                                ? 'text-primary dark:text-white'
+                                : 'text-zinc-500 dark:text-zinc-400 hover:text-primary dark:hover:text-zinc-200'
+                                }`}
+                        >
+                            {/* Active State Glow */}
+                            {currentView === item.id && (
+                                <motion.div
+                                    layoutId="nav-active"
+                                    className="absolute inset-0 bg-primary/10 dark:bg-white/5 border border-primary/20 dark:border-white/10 rounded-full shadow-[inset_0_1px_12px_rgba(255,255,255,0.05)]"
+                                    transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                                />
+                            )}
+
+                            <span className={`relative z-10 transition-transform duration-300 group-hover:-translate-y-[1px] flex items-center gap-2 ${currentView === item.id ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'
+                                }`}>
                                 {item.icon}
                                 <span>{item.label}</span>
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Mobile Menu Button */}
-                    <div className="md:hidden flex items-center">
-                        <button
-                            onClick={() => setIsMenuOpen(!isMenuOpen)}
-                            className="text-slate-400 hover:text-white p-2"
-                        >
-                            {isMenuOpen ? <X size={24} /> : <Menu size={24} />}
+                            </span>
                         </button>
-                    </div>
+                    ))}
+                </div>
+
+                <div className="h-4 w-[1px] bg-edu-border-light dark:bg-white/10 mx-1" />
+
+                <div className="px-2">
+                    <ThemeToggle />
+                </div>
+
+                {/* Mobile Menu Toggle (Simplified for context) */}
+                <div className="md:hidden flex items-center px-2">
+                    <button
+                        onClick={() => setIsMenuOpen(!isMenuOpen)}
+                        className="text-zinc-400 hover:text-white p-2 transition-colors"
+                    >
+                        {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
+                    </button>
                 </div>
             </div>
 
-            {/* Mobile Menu Dropdown */}
-            {isMenuOpen && (
-                <div className="md:hidden bg-slate-900 border-b border-slate-800">
-                    <div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
-                        {navItems.map((item) => (
-                            <button
-                                key={item.id}
-                                onClick={() => {
-                                    onViewChange(item.id);
-                                    setIsMenuOpen(false);
-                                }}
-                                className={`w-full text-left block px-3 py-2 rounded-md text-base font-medium flex items-center gap-3 ${currentView === item.id
-                                    ? 'bg-slate-800 text-white'
-                                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                                    }`}
-                            >
-                                {item.icon}
-                                {item.label}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
+            {/* Mobile Menu Dropdown - Refined for floating style */}
+            <AnimatePresence>
+                {isMenuOpen && (
+                    <motion.div
+                        initial={{ opacity: 0, y: -20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -20, scale: 0.95 }}
+                        className="absolute top-16 left-4 right-4 bg-white/95 dark:bg-[#121212]/90 backdrop-blur-xl border border-edu-border-light dark:border-[#6366F1]/20 rounded-3xl p-3 shadow-2xl md:hidden pointer-events-auto"
+                    >
+                        <div className="grid grid-cols-1 gap-1">
+                            {navItems.map((item) => (
+                                <button
+                                    key={item.id}
+                                    onClick={() => {
+                                        onViewChange(item.id);
+                                        setIsMenuOpen(false);
+                                    }}
+                                    className={`w-full text-left px-4 py-3 rounded-2xl text-[15px] font-medium flex items-center gap-4 transition-all ${currentView === item.id
+                                        ? 'bg-white/10 text-white border border-white/10 shadow-inner'
+                                        : 'text-zinc-400 hover:text-white hover:bg-white/5'
+                                        }`}
+                                >
+                                    <span className={currentView === item.id ? 'text-primary' : ''}>{item.icon}</span>
+                                    {item.label}
+                                </button>
+                            ))}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </nav>
     );
 };
+
+// Internal motion dependency mock if not wrapped, but App.jsx uses framer-motion
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default Navbar;

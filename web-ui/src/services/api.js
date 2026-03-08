@@ -69,12 +69,77 @@ export const getStudentSessions = async (studentId) => {
     }
 };
 
+
+export const fetcher = url => axios.get(url).then(res => res.data);
+
 export const deleteSession = async (sessionId) => {
     try {
         const response = await axios.delete(`${API_BASE_URL}/api/sessions/${sessionId}`);
         return response.data;
     } catch (error) {
         console.error("Delete Session Error", error);
+        throw error;
+    }
+};
+
+export const savePerformance = async (performanceData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/performance/save`, performanceData);
+        return response.data;
+    } catch (error) {
+        console.error("Save Performance Error", error);
+        throw error;
+    }
+};
+
+export const updateSessionProgress = async (sessionId, topicId) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/session/progress`, { session_id: sessionId, topic_id: topicId });
+        return response.data;
+    } catch (error) {
+        console.error("Update Progress Error", error);
+        throw error;
+    }
+};
+
+export const evaluateChallenge = async (challengeData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/challenge/evaluate`, challengeData);
+        return response.data;
+    } catch (error) {
+        console.error("Evaluate Challenge Error", error);
+        throw error;
+    }
+};
+
+export const getLessonContent = async (studentId, topicId) => {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/api/lesson/content`, {
+            params: { student_id: studentId, topic_id: topicId }
+        });
+        return response.data.content;
+    } catch (error) {
+        console.error("Get Lesson Content Error", error);
+        return null;
+    }
+};
+
+export const saveLessonContent = async (contentData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/lesson/save_content`, contentData);
+        return response.data;
+    } catch (error) {
+        console.error("Save Lesson Content Error", error);
+        throw error;
+    }
+};
+
+export const syncStudentProgress = async (progressData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/lesson/sync_progress`, progressData);
+        return response.data;
+    } catch (error) {
+        console.error("Sync Progress Error", error);
         throw error;
     }
 };
