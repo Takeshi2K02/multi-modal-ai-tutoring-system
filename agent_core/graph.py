@@ -84,11 +84,13 @@ async def retrieve_context(state: AgentState) -> AgentState:
     vectordb = get_vector_db()
     rag_results = vectordb.search(state["user_query"], top_k=5)
     rag_context = "\n---\n".join([r["text"] for r in rag_results])
+    rag_sources = [r.get("metadata", {}).get("source", "unknown") for r in rag_results]
     
     context_data = {
         "snapshot": snapshot.dict(),
         "history": memory.get_recent_history(student_id),
-        "rag_evidence": rag_context
+        "rag_evidence": rag_context,
+        "rag_sources": rag_sources
     }
 
     # Initialize Root Node
@@ -619,6 +621,23 @@ async def finalize_output(state: AgentState) -> AgentState:
         
         # Enhanced Logging: Print full response object equivalent (the string output in this case)
         print(f"[ToT] >>> LLM Response Payload: {full_lesson}")
+        
+        # Project ID: 25-26J-130: Mermaid Syntax Repair Filter
+        # Strips all Markdown formatting (bolding, etc) from inside mermaid blocks
+        def repair_mermaid(text):
+            def clean_mermaid(match):
+                inner = match.group(1)
+                # Strip markdown bolding/italics
+                inner = re.sub(r"\*\*|\_\_", "", inner)
+                # Strip leading/trailing whitespace
+                return f"[MERMAID_START]\n{inner.strip()}\n[MERMAID_END]"
+            return re.sub(r"\[MERMAID_START\](.*?)\[MERMAID_END\]", clean_mermaid, text, flags=re.DOTALL)
+        
+        full_lesson = repair_mermaid(full_lesson)
+        
+        # Project ID: 25-26J-130: RAG Verification Audit
+        rag_sources = state["context_data"].get("rag_sources", [])
+        print(f"[ToT] 📚 --- RAG Source Audit (Count: {len(rag_sources)}): {rag_sources}")
         
         # Content Synthesis Validation
         if not full_lesson or not isinstance(full_lesson, str) or len(full_lesson.strip()) == 0:

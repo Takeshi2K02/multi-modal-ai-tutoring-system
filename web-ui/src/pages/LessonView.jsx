@@ -536,7 +536,10 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                                     {topic?.title}
                                 </h2>
                                 <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 dark:text-slate-500 tracking-wide">
-                                    <span className="flex items-center gap-1.5"><Gamepad2 size={14} /> Interactive Node</span>
+                                    <span className="flex items-center gap-1.5">
+                                        <Gamepad2 size={14} />
+                                        {strategyLabel ? `${strategyLabel.replace(/_/g, ' ')} NODE` : 'INTERACTIVE NODE'}
+                                    </span>
                                     <span className="w-1 h-1 rounded-full bg-zinc-200 dark:bg-white/10" />
                                     <span className="flex items-center gap-1.5"><FileText size={14} /> {content?.type || 'Synthesis'}</span>
                                 </div>
@@ -554,7 +557,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                                         },
                                         p: ({ children }) => <p className="mb-6 leading-relaxed opacity-90">{children}</p>,
                                         h3: ({ children }) => <h3 className="text-2xl font-light text-primary mt-12 mb-6 tracking-tight">{children}</h3>,
-                                        li: ({ children }) => <li className="mb-3 list-disc list-inside opacity-80">{children}</li>,
+                                        li: ({ children }) => <li className="mb-3 list-disc ml-6 opacity-80">{children}</li>,
                                         strong: ({ children }) => <strong className="font-bold text-white border-b border-primary/30">{children}</strong>
                                     }}>
                                         {sanitizedContent}
