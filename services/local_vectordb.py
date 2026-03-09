@@ -48,17 +48,18 @@ class LocalVectorDB(VectorDBInterface):
                 meta = metadatas[i] or {}
                 
                 # Standardize return format matching MockVectorDB
+                source_id = meta.get("source_file") or meta.get("lecture_id") or meta.get("filename") or "local"
                 doc = {
                     "id": ids[i],
                     "title": meta.get("lecture_title", "Unknown Title"),
                     "text": documents[i],
                     "score": round(score, 3),
                     "metadata": {
-                        "lecture_id": meta.get("source_file", "local"),
+                        "source": source_id,
+                        "lecture_id": source_id,
                         "page": meta.get("page_number"),
-                        # Add other meta keys as needed by decomposition service
                         "lecture_title": meta.get("lecture_title"),
-                        "week": 0 # Default if not parsed
+                        "week": 0
                     }
                 }
                 output.append(doc)

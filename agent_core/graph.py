@@ -592,11 +592,18 @@ async def finalize_output(state: AgentState) -> AgentState:
         
         TASK: Expand this thought into a full multimodal lesson for a student.
         REQUIREMENTS:
-        1. Start with a specific analogy: THE SUPERMARKET RECEIPT ANALOGY.
+        1. Start with a specific analogy: THE SUPERMARKET RECEIPT ANALOGY. 
+           (CRITICAL: Do NOT use ANY other analogies like Lego City or Skyscrapers).
         2. Explain 3 key technical terms related to Dimensional Modelling (Facts, Dimensions, Grain).
         3. Include a [MERMAID_START] diagram using [MERMAID_END] tags.
+           - STRICT MERMAID RULES:
+             - Use 'graph TD' syntax.
+             - Central Node MUST be 'FactReceiptLineItem'.
+             - Surround it with EXACTLY 5 dimensions: DimDate, DimProduct, DimStore, DimCustomer, DimPromotion.
+             - Lay it out as a Star Schema (Fact in center, Dimensions pointing to it).
+             - Labels MUST NOT contain brackets [], parentheses (), or bolding **.
+             - Use simple arrows --> only.
         4. Maintain an encouraging, professional tone.
-        5. Tone: Mentorship-style.
         
         OUTPUT: Pure Markdown text with multimodal tags.
     """)
@@ -679,6 +686,9 @@ graph TD
     # Simple outcome comparison
     outcome = "Improved" if simulated_final_score > initial_score else "Stable"
     
+    # Project ID: 25-26J-130: RL Reinforcement - Flag high-confidence examples
+    is_high_confidence = simulated_final_score >= 0.85
+    
     # Project ID: 25-26J-130: Generate Interaction ID early for scope stability
     from bson import ObjectId
     interaction_id = str(ObjectId())
@@ -697,6 +707,8 @@ graph TD
             "engagement_score": snapshot.get("current_affect", {}).get("score", 0.5), # Audit Requirement
             "outcome": outcome,
             "trace": trace,
+            "high_confidence": is_high_confidence,
+            "rag_sources": state["context_data"].get("rag_sources", []),
             "timestamp": datetime.now()
         })
     asyncio.create_task(save_mem())
@@ -712,7 +724,10 @@ graph TD
         "outcome": outcome,
         "trace": trace,
         "interaction_id": interaction_id,
-        "strategy_label": strategy_label
+        "strategy_label": strategy_label,
+        "high_confidence": is_high_confidence,
+        "rag_sources": state["context_data"].get("rag_sources", []),
+        "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL"
     })
 
     return {
@@ -724,6 +739,7 @@ graph TD
         "reasoning_trace": trace,
         "interaction_outcome": outcome,
         "selected_strategy_label": strategy_label,
+        "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
         "interaction_id": interaction_id,
         "build_time": latency
     }

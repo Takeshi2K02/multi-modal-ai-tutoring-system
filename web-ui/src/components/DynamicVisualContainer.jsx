@@ -1,21 +1,3 @@
-import React, { useEffect, useRef } from 'react';
-import mermaid from 'mermaid';
-
-mermaid.initialize({
-    startOnLoad: true,
-    theme: 'dark',
-    securityLevel: 'loose',
-    fontFamily: 'Inter, sans-serif',
-    themeVariables: {
-        primaryColor: '#6366f1',
-        primaryTextColor: '#fff',
-        primaryBorderColor: '#6366f1',
-        lineColor: '#4f46e5',
-        secondaryColor: '#10b981',
-        tertiaryColor: '#121212',
-    }
-});
-
 const DynamicVisualContainer = ({ type, data, onMountFailure, onRender }) => {
     useEffect(() => {
         if (!data && onMountFailure) {
@@ -30,12 +12,20 @@ const DynamicVisualContainer = ({ type, data, onMountFailure, onRender }) => {
     useEffect(() => {
         if (type === 'mermaid' && data && mermaidRef.current) {
             try {
+                // Clear state for re-render
                 mermaidRef.current.removeAttribute('data-processed');
-                mermaid.contentLoaded();
-                // Notify parent of successful render
-                if (onRender) onRender(true);
+                // Use run() for explicit rendering in Mermaid 10+
+                mermaid.run({
+                    nodes: [mermaidRef.current],
+                    suppressErrors: true
+                }).then(() => {
+                    if (onRender) onRender(true);
+                }).catch(err => {
+                    console.error(">>> [Mermaid] Rendering Failed:", err);
+                    if (onRender) onRender(false);
+                });
             } catch (err) {
-                console.error(">>> [Mermaid] Rendering Error:", err);
+                console.error(">>> [Mermaid] Fatal Error:", err);
                 if (onRender) onRender(false);
             }
         }

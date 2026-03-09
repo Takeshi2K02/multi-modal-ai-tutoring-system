@@ -16,6 +16,7 @@ import {
     AlertCircle
 } from 'lucide-react';
 import DynamicVisualContainer from '../components/DynamicVisualContainer';
+import Mermaid from '../components/Mermaid';
 import {
     runSimulation,
     savePerformance,
@@ -260,17 +261,19 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
     const [strategyLabel, setStrategyLabel] = useState(null);
     const [feedbackSent, setFeedbackSent] = useState(false);
     const [score, setScore] = useState(0);
-    const [signal, setSignal] = useState({ nodes: [], edges: [] }); // Project ID 25-26J-130 Fix
+    const [signalData, setSignalData] = useState({ nodes: [], edges: [] }); // Renamed to avoid collision with AbortSignal
+    const [currentModality, setCurrentModality] = useState('Synthesis');
+    const [ragSources, setRagSources] = useState([]);
 
     // Project ID: 25-26J-130: Hydration Guard for Cognitive Path
     useEffect(() => {
-        if (signal?.nodes?.length > 0 && !isVisualReady) {
+        if (signalData?.nodes?.length > 0 && !isVisualReady) {
             console.log(">>> [Hydration] Signal nodes detected, preparing visual flow...");
             // Small delay to ensure Mermaid has context if needed
             const timer = setTimeout(() => setIsVisualReady(true), 800);
             return () => clearTimeout(timer);
         }
-    }, [signal?.nodes, isVisualReady]);
+    }, [signalData?.nodes, isVisualReady]);
 
     useEffect(() => {
         const initializeLesson = async (signal) => {
@@ -308,6 +311,8 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                 const scenario = `Teach me about ${topic.title}`;
                 const result = await runSimulation(scenario, topic);
 
+                if (result.nodes) setSignalData({ nodes: result.nodes, edges: result.edges || [] });
+
                 if (signal.aborted) return;
 
                 if (result.meta?.strategy === 'ERROR' || result.meta?.strategy === 'TIMED_OUT') {
@@ -329,7 +334,9 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
 
                 setContent(directive);
                 setInteractionId(result.meta?.interaction_id);
-                setStrategyLabel(result.meta?.strategy_label);
+                setStrategyLabel(result.meta?.selected_strategy_label || result.meta?.strategy_label);
+                setRagSources(result.meta?.rag_sources || []);
+                setCurrentModality(result.meta?.current_modality || (directive?.content?.includes('graph TD') ? 'VISUAL' : 'TEXTUAL'));
 
                 // ASYNC RENDER SYNCHRONIZATION
                 if (directive && (directive.content || directive.full_text)) {
@@ -355,9 +362,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         };
 
         const controller = new AbortController();
-        if (signal) {
-            initializeLesson(controller.signal);
-        }
+        initializeLesson(controller.signal);
 
         return () => {
             controller.abort();
@@ -387,12 +392,6 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         return text.includes('Design Challenge') || text.includes('### Challenge');
     }, [content, topic?.id]);
 
-    const mermaidData = useMemo(() => {
-        const text = typeof content?.content === 'string' ? content.content : '';
-        const match = text.match(/\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]/m);
-        return match ? match[1].trim() : null;
-    }, [content, topic?.id]);
-
     const sanitizedContent = useMemo(() => {
         if (typeof content?.content !== 'string') return '';
         let text = content.content;
@@ -408,10 +407,27 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         return text.trim();
     }, [content, topic?.id]);
 
+    // Project ID: 25-26J-130: Mermaid Whitespace Stripper & Hidden Character Fix
+    const mermaidData = useMemo(() => {
+        if (!sanitizedContent || !sanitizedContent.includes('[MERMAID_START]')) return null;
+        // Search original content to avoid stripped tags
+        const originalText = typeof content?.content === 'string' ? content.content : '';
+        const match = originalText.match(/\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]/);
+        if (match && match[1]) {
+            // Trim every line to remove hidden \r or non-breaking spaces
+            return match[1]
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .join('\n');
+        }
+        return null;
+    }, [sanitizedContent, content?.content]);
+
     // Conditional Guard for empty content
     const isContentViewable = useMemo(() => {
-        return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge || signal?.nodes?.length > 0);
-    }, [sanitizedContent, mermaidData, content, hasDesignChallenge, signal?.nodes]);
+        return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge || signalData?.nodes?.length > 0);
+    }, [sanitizedContent, mermaidData, content, hasDesignChallenge, signalData?.nodes]);
 
     const isReadyToComplete = useMemo(() => {
         if (!isContentViewable) return false;
@@ -538,10 +554,10 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                                 <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 dark:text-slate-500 tracking-wide">
                                     <span className="flex items-center gap-1.5">
                                         <Gamepad2 size={14} />
-                                        {strategyLabel ? `${strategyLabel.replace(/_/g, ' ')} NODE` : 'INTERACTIVE NODE'}
+                                        {strategyLabel ? `${strategyLabel.replace(/_/g, ' ')}` : 'INTERACTIVE NODE'}
                                     </span>
                                     <span className="w-1 h-1 rounded-full bg-zinc-200 dark:bg-white/10" />
-                                    <span className="flex items-center gap-1.5"><FileText size={14} /> {content?.type || 'Synthesis'}</span>
+                                    <span className="flex items-center gap-1.5"><FileText size={14} /> {currentModality}</span>
                                 </div>
                             </div>
 
@@ -567,12 +583,15 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
 
                             {/* ComponentFactory: Dynamic Hydration Layer */}
                             {mermaidData && (
-                                <DynamicVisualContainer
-                                    type="mermaid"
-                                    data={mermaidData}
-                                    onMountFailure={handleForceRegenerate}
-                                    onRender={(success) => setIsVisualReady(success)}
-                                />
+                                <div className="my-12 p-8 bg-[#121212]/50 rounded-[40px] border border-white/5 shadow-2xl overflow-hidden group transition-all hover:border-primary/20">
+                                    <div className="flex items-center gap-3 mb-8">
+                                        <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center border border-primary/20">
+                                            <span className="text-[10px] font-black text-primary">VIS</span>
+                                        </div>
+                                        <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400">Architectural Schema</h4>
+                                    </div>
+                                    <Mermaid chart={mermaidData} />
+                                </div>
                             )}
 
                             {hasDesignChallenge && (
@@ -671,6 +690,26 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                                         </motion.button>
                                     )}
                                 </AnimatePresence>
+
+                                {/* Project ID: 25-26J-130: Knowledge Sources Footer */}
+                                {ragSources?.length > 0 && (
+                                    <div className="mt-12 w-full pt-12 border-t border-edu-border-light dark:border-white/5">
+                                        <div className="flex flex-col gap-4">
+                                            <div className="flex items-center gap-2">
+                                                <Database size={14} className="text-secondary" />
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-secondary">Verified Knowledge Sources</span>
+                                            </div>
+                                            <div className="flex flex-wrap gap-3">
+                                                {Array.from(new Set(ragSources)).map((src, idx) => (
+                                                    <div key={idx} className="px-4 py-2 bg-secondary/5 border border-secondary/10 rounded-full flex items-center gap-2 text-[10px] text-zinc-500 font-medium lowercase">
+                                                        <FileText size={12} className="opacity-50" />
+                                                        {src}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </motion.div>
                     )}
