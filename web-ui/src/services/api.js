@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Ensure this matches uvicorn port
-export const API_BASE_URL = 'http://127.0.0.1:8000';
+export const API_BASE_URL = 'http://localhost:8000';
 
 export const runSimulation = async (scenario, topicContext = null) => {
     try {
@@ -141,5 +141,25 @@ export const syncStudentProgress = async (progressData) => {
     } catch (error) {
         console.error("Sync Progress Error", error);
         throw error;
+    }
+};
+
+export const handleUserFeedback = async (feedbackData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/user/feedback`, feedbackData);
+        return response.data;
+    } catch (error) {
+        console.error("Feedback Error", error);
+        throw error;
+    }
+};
+
+export const getStudentProfile = async (studentId) => {
+    try {
+        const response = await axios.get(`${API_BASE_URL}/api/user/profile/${studentId}`);
+        return response.data;
+    } catch (error) {
+        console.error("Get Profile Error", error);
+        return null;
     }
 };

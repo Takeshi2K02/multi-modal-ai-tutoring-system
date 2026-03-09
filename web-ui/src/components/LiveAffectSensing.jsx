@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from '../services/api';
 
-const LiveAffectSensing = ({ userId = "alex_123", materialId = "active_lesson", enabled = false }) => {
+const LiveAffectSensing = ({ userId = "alex_123", materialId = "active_lesson", enabled = false, interactionId = null }) => {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const [cameraActive, setCameraActive] = useState(false);
@@ -54,7 +54,8 @@ const LiveAffectSensing = ({ userId = "alex_123", materialId = "active_lesson", 
                         body: JSON.stringify({
                             frame: frame.split(',')[1],
                             user_id: userId,
-                            material_id: materialId
+                            material_id: materialId,
+                            interaction_id: interactionId
                         })
                     }).catch(e => console.warn(">>> [CV] Backend Offline"));
                 }

@@ -1,0 +1,50 @@
+CV FEATURE INVENTORY: PROJECT ID 25-26J-130
+=========================================
+Document ID: CV-RL-MAP-2026-03-08
+Target: Reinforcement Learning (RL) Engine Retraining
+
+1. RAW NUMERICAL OUTPUTS
+------------------------
+* engagement_score: 
+    - Range: 0.00 to 1.00
+    - Calculation: Weighted heuristic (60% Emotion ML, 20% Gaze Vector, 20% Posture Alignment).
+* emotion_conf:
+    - Range: 0.00 to 1.00
+    - Calculation: Softmax output from the ViT emotion classifier.
+* eye_aspect_ratio (EAR):
+    - Range: 0.10 to 0.40
+    - Calculation: Euclidean distance ratio of vertical vs. horizontal eyelid landmarks.
+* Sampling Frequency: 0.5 Hz (1 frame every 2000ms).
+
+2. AFFECTIVE STATE CLASSIFICATIONS
+----------------------------------
+* Detected States: [frustrated, confused, confident, focused, bored, curious, neutral].
+* Derivation Logic:
+    - Fine-tuned Vision Transformer (ViT) on FER datasets.
+    - Landmark mapping: 478-point MediaPipe FaceMesh used for EAR and Gaze.
+    - Posture mapping: MediaPipe PoseLandmarker (Shoulder/Ear/Nose coordinates) used to detect lean and tilt.
+
+3. TEMPORAL DATA HANDLING
+-------------------------
+* Windowing Logic: 
+    - Real-time emission is frame-by-frame (0.5 Hz).
+    - Engagement Trend: Calculated over a 10-minute sliding window (improving | stable | declining).
+* Event Triggers:
+    - Deviation_Alert: Fires when the current engagement_score falls below 50% of the 10-minute historical average.
+    - Attention_Drop: Internal flag for sustained EAR below 0.18 for > 3 seconds.
+
+4. RL INPUT COMPATIBILITY (TutorEnv Observation Space)
+------------------------------------------------------
+* PASSED TO OBSERVATION_SPACE:
+    - attention (Mapped from engagement_score)
+    - confusion (Binary/Heuristic trigger if emotion == 'frustrated')
+    - boredom (Binary/Heuristic trigger if emotion == 'bored')
+* CURRENTLY IGNORED (Available for Reward Signal):
+    - emotion_confidence (Critical for discounting noise)
+    - gaze_direction (Categorical: forward, left, right, up, down, away)
+    - posture_state (Categorical: upright, leaning_forward, slouching, etc.)
+    - eye_state (Categorical: open, drowsy, closed)
+    - engagement_context_state (Cross-modality match with screen OCR)
+
+---------------------------------------------------------
+Signature: CV Backend Engineering / EduSynth Research

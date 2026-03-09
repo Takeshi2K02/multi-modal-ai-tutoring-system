@@ -1,4 +1,5 @@
 import os
+import logging
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -19,7 +20,8 @@ def get_db_connection():
         client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
         # Verify connection
         client.admin.command('ping')
-        print("Pinged your deployment. You successfully connected to MongoDB!")
+        # Project ID: 25-26J-130: Clean Logging - Suppress success ping
+        logging.getLogger('pymongo').setLevel(logging.CRITICAL)
         return client.get_database("edusynth_db")
     except Exception as e:
         print(f"Error connecting to MongoDB: {e}")
@@ -35,4 +37,9 @@ def get_students_collection(db):
 def get_interactions_collection(db):
     if db is not None:
         return db["interactions"]
+    return None
+
+def get_profiles_collection(db):
+    if db is not None:
+        return db["student_profiles"]
     return None

@@ -21,9 +21,10 @@ import {
     savePerformance,
     updateSessionProgress,
     evaluateChallenge,
-    getLessonContent,
     saveLessonContent,
-    syncStudentProgress
+    getLessonContent,
+    syncStudentProgress,
+    handleUserFeedback
 } from '../services/api';
 
 const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
@@ -253,12 +254,26 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
     const [isChallengeComplete, setIsChallengeComplete] = useState(false);
     const [isCompleting, setIsCompleting] = useState(false);
     const [response, setResponse] = useState('');
-    const [score, setScore] = useState(null);
     const [error, setError] = useState(null);
     const [isVisualReady, setIsVisualReady] = useState(false);
+    const [interactionId, setInteractionId] = useState(null);
+    const [strategyLabel, setStrategyLabel] = useState(null);
+    const [feedbackSent, setFeedbackSent] = useState(false);
+    const [score, setScore] = useState(0);
+    const [signal, setSignal] = useState({ nodes: [], edges: [] }); // Project ID 25-26J-130 Fix
+
+    // Project ID: 25-26J-130: Hydration Guard for Cognitive Path
+    useEffect(() => {
+        if (signal?.nodes?.length > 0 && !isVisualReady) {
+            console.log(">>> [Hydration] Signal nodes detected, preparing visual flow...");
+            // Small delay to ensure Mermaid has context if needed
+            const timer = setTimeout(() => setIsVisualReady(true), 800);
+            return () => clearTimeout(timer);
+        }
+    }, [signal?.nodes, isVisualReady]);
 
     useEffect(() => {
-        const initializeLesson = async () => {
+        const initializeLesson = async (signal) => {
             if (!topic) return;
             setLoading(true);
             setIsThinking(true);
@@ -270,6 +285,9 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                 const topicId = topic.id || topic.title;
                 // 0. Check for existing content
                 const existing = await getLessonContent("student_001", topicId);
+
+                if (signal.aborted) return;
+
                 if (existing && (existing.content || existing.directive)) {
                     console.log(">>> [Persistence] Loading saved lesson state");
                     const savedDirective = existing.directive || existing.content;
@@ -290,45 +308,61 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                 const scenario = `Teach me about ${topic.title}`;
                 const result = await runSimulation(scenario, topic);
 
+                if (signal.aborted) return;
+
+                if (result.meta?.strategy === 'ERROR' || result.meta?.strategy === 'TIMED_OUT') {
+                    console.error(">>> [Synthesis Error]", result.meta?.error);
+                    setError(result.meta?.body_text || "System is re-calibrating. Please wait a moment or try again.");
+                    setIsThinking(false);
+                    return;
+                }
+
                 // Extract directive from the best path
                 const bestNodeId = result.meta?.best_path_ids?.[result.meta.best_path_ids.length - 1];
                 const bestNode = result.nodes?.find(n => n.id === bestNodeId);
+
+                // Content Payload Binding: Prioritize contextually rich content (Project ID: 25-26J-130)
                 const directive = bestNode?.data?.directive || {
                     type: "explanation",
-                    content: result.meta?.final_response || "Concept synthesis complete."
+                    content: result.meta?.content?.full_text || result.meta?.body_text || result.meta?.final_response || "Concept synthesis complete."
                 };
 
-                // Save initial content for persistence
-                await saveLessonContent({
-                    student_id: "student_001",
-                    topic_id: topicId,
-                    content: directive,
-                    directive: directive
-                });
-
                 setContent(directive);
+                setInteractionId(result.meta?.interaction_id);
+                setStrategyLabel(result.meta?.strategy_label);
 
-                // ASYNC RENDER SYNCHRONIZATION: Verify content before dropping flag
-                if (directive && directive.content) {
+                // ASYNC RENDER SYNCHRONIZATION
+                if (directive && (directive.content || directive.full_text)) {
                     setTimeout(() => {
+                        if (signal.aborted) return;
                         setIsThinking(false);
                         onReady?.();
                     }, 1500); // Visual effect
                 } else {
                     console.error(">>> [Hydration] Synthesis returned empty content. Retrying...");
                     setError("Synthesis yielded empty content. Please try again.");
+                    setIsThinking(false);
                 }
 
             } catch (err) {
-                console.error("Lesson Init Error:", err);
-                setError("Failed to initialize cognitive path.");
+                if (err.name === 'AbortError') return;
+                console.error(">>> [Lesson Init Error]", err);
+                const message = err.response?.data?.detail || err.message || "Unknown error";
+                setError(`Failed to initialize cognitive path: ${message}`);
             } finally {
-                setLoading(false);
+                if (!signal.aborted) setLoading(false);
             }
         };
 
-        initializeLesson();
-    }, [topic]);
+        const controller = new AbortController();
+        if (signal) {
+            initializeLesson(controller.signal);
+        }
+
+        return () => {
+            controller.abort();
+        };
+    }, [topic.id || topic.title]);
 
     const handleForceRegenerate = async () => {
         setIsThinking(true);
@@ -376,8 +410,8 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
 
     // Conditional Guard for empty content
     const isContentViewable = useMemo(() => {
-        return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge);
-    }, [sanitizedContent, mermaidData, content, hasDesignChallenge]);
+        return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge || signal?.nodes?.length > 0);
+    }, [sanitizedContent, mermaidData, content, hasDesignChallenge, signal?.nodes]);
 
     const isReadyToComplete = useMemo(() => {
         if (!isContentViewable) return false;
@@ -423,6 +457,24 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
             console.error("Completion Error:", err);
         } finally {
             setIsCompleting(false);
+        }
+    };
+
+    const handleFeedback = async (sentiment) => {
+        if (!interactionId || feedbackSent) return;
+        setFeedbackSent(sentiment ? 'up' : 'down');
+        try {
+            const modality = (content?.type === 'visual_explanation' || sanitizedContent.includes('graph TD')) ? 'visual' : 'textual';
+            await handleUserFeedback({
+                student_id: "student_001",
+                interaction_id: interactionId,
+                action_type: strategyLabel || "SIMPLIFY_EXPLANATION",
+                sentiment: sentiment,
+                modality_type: modality,
+                topic_id: topic?.title
+            });
+        } catch (err) {
+            console.error("Feedback error:", err);
         }
     };
 
@@ -557,6 +609,42 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                             )}
 
                             <div className="pt-12 border-t border-edu-border-light dark:border-white/5 flex flex-col items-center gap-8">
+                                {/* Feedback Section (Project ID: 25-26J-130) */}
+                                <div className="flex flex-col items-center gap-4">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">How was this explanation?</p>
+                                    <div className="flex items-center gap-6">
+                                        <button
+                                            onClick={() => handleFeedback(true)}
+                                            disabled={feedbackSent}
+                                            className={clsx(
+                                                "p-4 rounded-full border transition-all hover:scale-110 active:scale-95",
+                                                feedbackSent === 'up' ? "bg-secondary/20 border-secondary text-secondary" : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50"
+                                            )}
+                                        >
+                                            <Sparkles size={20} />
+                                        </button>
+                                        <button
+                                            onClick={() => handleFeedback(false)}
+                                            disabled={feedbackSent}
+                                            className={clsx(
+                                                "p-4 rounded-full border transition-all hover:scale-110 active:scale-95",
+                                                feedbackSent === 'down' ? "bg-danger/20 border-danger text-danger" : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50"
+                                            )}
+                                        >
+                                            <XCircle size={20} />
+                                        </button>
+                                    </div>
+                                    {feedbackSent && (
+                                        <motion.p
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            className="text-[10px] text-zinc-500 italic"
+                                        >
+                                            Thank you! Your feedback helps refine your learning path.
+                                        </motion.p>
+                                    )}
+                                </div>
+
                                 <div className="flex items-center gap-3 opacity-50">
                                     <Database size={16} className="text-zinc-400" />
                                     <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Persistent Cognition Layer Active</span>

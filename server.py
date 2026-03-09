@@ -1,13 +1,42 @@
 import sys
 import os
+import asyncio
+import warnings
+import atexit
 from datetime import datetime, timedelta
+
+# Project ID: 25-26J-130: Clean Logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['GLOG_minloglevel'] = '3'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['TQDM_DISABLE'] = '1' # Block progress bars
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+warnings.filterwarnings("ignore", message=".*ChatVertexAI.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
+
+# Silence high-frequency third-party loggers
+import logging
+for logger_name in ["transformers", "mediapipe", "absl", "google", "google_auth_httplib2"]:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
+def cleanup_resources():
+    """Project ID: 25-26J-130: Robust semaphore cleanup."""
+    # print(">>> Performing resource cleanup...")
+    try:
+        from multiprocessing import resource_tracker
+        resource_tracker._resource_tracker._fd = None # Force reset
+        resource_tracker._resource_tracker.ensure_running()
+    except: pass
+
+atexit.register(cleanup_resources)
 
 # Add CV backend paths for direct hook access
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, "cv", "backend"))
 
-from agent_core.graph import create_tot_graph
-from agent_core.schemas import AgentState, ThoughtNode
 from services.decomposition_service import decompose_goal
 from services.ingestion_service import ingest_document
 from services.analysis_service import analyze_pdf_anatomy
@@ -21,6 +50,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Initialize FastAPI
 fastapi_app = FastAPI()
+
+# --- Logging Noise Suppression ---
+import logging
+class EndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Exclude high-frequency telemetry/analytics logs
+        return record.getMessage().find("/api/engagement/track") == -1 and \
+               record.getMessage().find("/api/telemetry/rl") == -1 and \
+               record.getMessage().find("/api/analytics/latest") == -1 and \
+               record.getMessage().find("/socket.io/") == -1
+
+# Filter uvicorn access logs
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 # Socket.io Setup
 sio = AsyncServer(async_mode='asgi', cors_allowed_origins='*')
@@ -39,11 +81,19 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
 )
 
-@fastapi_app.on_event("startup")
-async def startup_event():
-    print(">>> Agentic AI Core Starting...")
-    print(f">>> VectorDB Provider: Local (ChromaDB at {os.getcwd()}/local_data)")
-    print(">>> Mock VectorDB has been disabled.")
+from agent_core.graph import create_tot_graph
+from agent_core.schemas import AgentState, ThoughtNode
+
+@fastapi_app.on_event("shutdown")
+async def shutdown_event():
+    print(">>> Shutting down Agentic AI Core...")
+    # Clean up semaphores for MediaPipe/TensorFlow
+    try:
+        import multiprocessing.resource_tracker as rt
+        # Force cleanup of leaked semaphores
+        rt._resource_tracker.ensure_running()
+    except Exception as e:
+        print(f"Cleanup warning: {e}")
 
 class ScenarioRequest(BaseModel):
     scenario: str # "confused" | "bored"
@@ -96,6 +146,14 @@ class StudentProgressRequest(BaseModel):
     content: Dict[str, Any]
     user_response: Optional[str] = None
     ai_evaluation_score: Optional[float] = None
+
+class UserFeedbackRequest(BaseModel):
+    student_id: str
+    interaction_id: Optional[str] = None
+    action_type: str # e.g. "SIMPLIFY_EXPLANATION"
+    sentiment: bool # true = Up, false = Down
+    modality_type: str # "visual" | "textual" | "interactive"
+    topic_id: Optional[str] = None
 
 from services.learning_plan_service import LearningPlanService
 from services.learning_session_service import LearningSessionService
@@ -341,14 +399,20 @@ def transform_state_to_graph(state: AgentState) -> GraphResponse:
         edges=edges,
         meta={
             "best_path_ids": best_path_ids,
-            "final_response": state.get("final_response", ""),
+            "strategy": state.get("strategy", ""),
+            "content": {
+                "full_text": state.get("full_text", ""), # Project ID: 25-26J-130
+                "visual_tags": state.get("visual_tags", []) # Project ID: 25-26J-130
+            },
+            "body_text": state.get("body_text", ""), # Legacy support
             "run_stats": {
                 "total_nodes": len(tree_memory),
                 "depth": state.get("frontier", [ThoughtNode(content="", depth=0)])[0].depth if state.get("frontier") else 0
             },
-            "context_data": state.get("context_data", {}), # Expose CV/RL signals to UI
+            "context_data": state.get("context_data", {}), 
             "profile": state.get("profile", {}),
-            "tie_break_trace": state.get("tie_break_trace")
+            "interaction_id": state.get("interaction_id"),
+            "strategy_label": state.get("selected_strategy_label")
         }
     )
 
@@ -377,23 +441,72 @@ async def run_simulation(req: ScenarioRequest):
     if req.topic_content:
         context_data["topic_content"] = req.topic_content
         
-    initial_state = {
-        "student_id": student_id,
+    initial_state: AgentState = {
+        "student_id": "student_001",
         "user_query": query,
         "context_data": context_data,
+        "profile": None,
         "frontier": [],
         "tree_memory": {},
-        "best_node": None
+        "best_node": None,
+        "student_preferences": {},
+        "strategy_blacklist": [],
+        "teaching_strategy": None,
+        "final_response": None,
+        "reasoning_trace": [],
+        "build_time": 0.0,
+        "stop_early": False,
+        "selected_strategy_label": None,
+        "interaction_outcome": None,
+        "interaction_id": None
     }
     
     # Run Agent
     agent = create_tot_graph()
     try:
-        final_state = await agent.ainvoke(initial_state, config={"recursion_limit": 20})
+        # Project ID: 25-26J-130: 90s Timeout Guard for Multimodal Synthesis
+        final_state = await asyncio.wait_for(
+            agent.ainvoke(initial_state, config={"recursion_limit": 20}),
+            timeout=90.0
+        )
         return transform_state_to_graph(final_state)
+    except asyncio.TimeoutError:
+        print(">>> Timeout Error: ToT Simulation exceeded 90s.")
+        # Project ID: 25-26J-130: Return valid GraphResponse for UI stability
+        return {
+            "nodes": [],
+            "edges": [],
+            "meta": {
+                "strategy": "TIMED_OUT",
+                "body_text": "Pedagogical synthesis taking longer than expected. Please try again or simplify the topic.",
+                "interaction_id": "error_timeout",
+                "error": "TO_SIM_TIMEOUT"
+            }
+        }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
+        errorMessage = str(e)
+        
+        # Project ID: 25-26J-130: Handle Model Not Found (404)
+        if "404" in errorMessage or "not found" in errorMessage.lower():
+            displayMessage = "Model is temporarily unavailable in this region. Please contact support or try again later."
+            interaction_id = "error_404"
+        else:
+            displayMessage = f"System encountered an error during synthesis: {errorMessage}"
+            interaction_id = "error_crash"
+            
         print(f"Agent Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "nodes": [],
+            "edges": [],
+            "meta": {
+                "strategy": "ERROR",
+                "body_text": displayMessage,
+                "interaction_id": interaction_id,
+                "error": errorMessage
+            }
+        }
 
 @fastapi_app.post("/api/goal_decompose")
 async def goal_decompose(req: DecomposeRequest):
@@ -582,12 +695,14 @@ class CVTelemetryRequest(BaseModel):
     gaze: Optional[str] = "unknown"
     posture: Optional[str] = "unknown"
     engagement_state: Optional[str] = "unknown"
+    interaction_id: Optional[str] = None
     metadata: Optional[Dict] = None
 
 class CVTrackRequest(BaseModel):
     frame: str
     user_id: str
     material_id: Optional[str] = None
+    interaction_id: Optional[str] = None
 
 class RLTelemetryRequest(BaseModel):
     user_id: str
@@ -601,8 +716,8 @@ async def track_engagement_direct(req: CVTrackRequest):
     Direct hook for webcam frames. Processes and emits for Admin Monitor.
     """
     try:
-        print(f">>> CV Frame Received. PID={os.getpid()} Exec={sys.executable}")
-        print(f">>> Current sys.path: {sys.path[:3]}...") # Log start of path
+        # print(f">>> CV Frame Received. PID={os.getpid()} Exec={sys.executable}")
+        # print(f">>> Current sys.path: {sys.path[:3]}...") # Log start of path
 
         from services.engagement_service import process_engagement_data
         from integration.persistence import push_cv_data
@@ -618,6 +733,7 @@ async def track_engagement_direct(req: CVTrackRequest):
             gaze=result.get('gaze', 'unknown'),
             posture=result.get('posture', 'unknown'),
             engagement_state=result.get('engagement_state', 'unknown'),
+            interaction_id=req.interaction_id,
             metadata=result
         )
         
@@ -630,7 +746,7 @@ async def track_engagement_direct(req: CVTrackRequest):
 
 @fastapi_app.post("/api/telemetry/cv")
 async def receive_cv_telemetry(req: CVTelemetryRequest):
-    print(f">>> CV Telemetry Received: User={req.user_id}, Score={req.engagement_score}, Emotion={req.emotion}")
+    # print(f">>> CV Telemetry Received: User={req.user_id}, Score={req.engagement_score}, Emotion={req.emotion}")
     from integration.persistence import push_cv_data
     await push_cv_data(
         req.user_id, 
@@ -639,17 +755,130 @@ async def receive_cv_telemetry(req: CVTelemetryRequest):
         gaze=req.gaze, 
         posture=req.posture, 
         engagement_state=req.engagement_state, 
+        interaction_id=req.interaction_id,
         metadata=req.metadata
     )
     return {"status": "telemetry_logged"}
 
 @fastapi_app.post("/api/telemetry/rl")
 async def receive_rl_telemetry(req: RLTelemetryRequest):
-    print(f">>> RL Telemetry Received: User={req.user_id}, Action={req.action_id}, Conf={req.confidence}")
+    # print(f">>> RL Telemetry Received: User={req.user_id}, Action={req.action_id}, Conf={req.confidence}")
     from integration.persistence import push_rl_strategy
     await push_rl_strategy(req.user_id, req.action_id, req.confidence, req.reasoning)
     return {"status": "telemetry_logged"}
 
+
+@fastapi_app.post("/api/user/feedback")
+async def handle_user_feedback(req: UserFeedbackRequest):
+    """
+    Updates student preferences based on Thumbs Up/Down.
+    """
+    try:
+        from db.connection import get_db_connection, get_profiles_collection
+        db = get_db_connection()
+        profiles = get_profiles_collection(db)
+        
+        # 1. Update Profile or create if missing
+        profile = profiles.find_one({"student_id": req.student_id})
+        if not profile:
+            profile = {
+                "student_id": req.student_id,
+                "preferred_modality": {"visual": 0.33, "textual": 0.33, "interactive": 0.34},
+                "historical_mastery": {},
+                "engagement_baseline": 0.5,
+                "learning_history": []
+            }
+            profiles.insert_one(profile)
+            
+        # 2. Update Weights
+        weights = profile.get("preferred_modality", {"visual": 0.33, "textual": 0.33, "interactive": 0.34})
+        
+        increment = 0.05 if req.sentiment else -0.05
+        target_modality = req.modality_type.lower()
+        
+        if target_modality in weights:
+            weights[target_modality] = max(0.1, min(0.8, weights.get(target_modality, 0.33) + increment))
+            
+            # Special Rule: Positive feedback on SIMPLIFY_EXPLANATION + Visual 
+            # also boosts textual (simple) weight
+            if req.sentiment and req.action_type == "SIMPLIFY_EXPLANATION" and target_modality == "visual":
+                weights["textual"] = max(0.1, min(0.8, weights.get("textual", 0.33) + 0.05))
+
+        # Normalize weights
+        total = sum(weights.values())
+        for k in weights:
+            weights[k] = round(weights[k] / total, 2)
+            
+        # 3. Handle Strategy Blacklist (Project ID: 25-26J-130)
+        blacklist_update = {}
+        if not req.sentiment and req.topic_id:
+            blacklist = profile.get("strategy_blacklist", {})
+            if req.topic_id not in blacklist:
+                blacklist[req.topic_id] = []
+            if req.action_type not in blacklist[req.topic_id]:
+                blacklist[req.topic_id].append(req.action_type)
+            blacklist_update = {"strategy_blacklist": blacklist}
+
+        # 4. Save Profile Updates
+        update_data = {"preferred_modality": weights}
+        if blacklist_update:
+            update_data.update(blacklist_update)
+
+        profiles.update_one(
+            {"student_id": req.student_id},
+            {
+                "$set": update_data,
+                "$push": {
+                    "learning_history": {
+                        "timestamp": datetime.utcnow(),
+                        "action_taken": req.action_type,
+                        "user_feedback": 1 if req.sentiment else -1
+                    }
+                }
+            }
+        )
+
+        # 5. Update Interaction Outcome (Project ID: 25-26J-130)
+        if req.interaction_id:
+            outcome = "Positive" if req.sentiment else "Negative"
+            db.interactions.update_one(
+                {"_id": req.interaction_id}, # Note: Assume it's an ObjectId or string depending on client
+                {"$set": {"outcome": outcome}}
+            )
+            # Try by string ID if ObjectId fails in client code
+            from bson import ObjectId
+            try:
+                db.interactions.update_one({"_id": ObjectId(req.interaction_id)}, {"$set": {"outcome": outcome}})
+            except: pass
+        
+        return {"status": "success", "new_weights": weights}
+    except Exception as e:
+        print(f"Feedback Update Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@fastapi_app.get("/api/user/profile/{student_id}")
+async def get_user_profile(student_id: str):
+    """
+    Fetches student profile data.
+    """
+    try:
+        from db.connection import get_db_connection, get_profiles_collection
+        db = get_db_connection()
+        profiles = get_profiles_collection(db)
+        
+        profile = profiles.find_one({"student_id": student_id}, {"_id": 0})
+        if not profile:
+            return {
+                "student_id": student_id,
+                "preferred_modality": {"visual": 0.33, "textual": 0.33, "interactive": 0.34},
+                "historical_mastery": {},
+                "engagement_baseline": 0.5,
+                "learning_history": []
+            }
+        return profile
+    except Exception as e:
+        print(f"Profile Fetch Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @fastapi_app.get("/health")
 def health_check():

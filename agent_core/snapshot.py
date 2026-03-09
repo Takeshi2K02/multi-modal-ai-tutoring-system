@@ -42,7 +42,7 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
 
     # --- Cold Start Logic ---
     if not latest_cv:
-        print(f"Cold Start: No history for student {user_id}. Using defaults.")
+        # print(f"Cold Start: No history for student {user_id}. Using defaults.")
         return StudentStateSnapshot(
             engagement_trend="stable",
             current_affect={"emotion": "neutral", "score": 0.5},
@@ -90,6 +90,10 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
             "score": current_score
         },
         rl_strategy=strategy_name,
+        action_id=action_id, # Hard constraint for pruning
         performance_summary=perf_summary,
-        deviation_alert=deviation_alert
+        deviation_alert=deviation_alert,
+        mastery_level=latest_perf.get("mastery", 0.5) if latest_perf else 0.5,
+        session_fatigue=0.0, # Placeholder or calc derived from time_on_task
+        confidence=latest_cv.get("emotion_conf", 0.5)
     )

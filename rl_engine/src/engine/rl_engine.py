@@ -1,12 +1,12 @@
 # src/engine/rl_engine.py
 import time
-from stable_baselines3 import DQN
+from stable_baselines3 import PPO
 import numpy as np
 
 class RLEngine:
     def __init__(self, model_path=None, env=None):
         if model_path:
-            self.model = DQN.load(model_path, env=env)
+            self.model = PPO.load(model_path, env=env)
         else:
             self.model = None
 

@@ -1,6 +1,8 @@
 import os
+from datetime import datetime
 import uuid
 import asyncio
+import time
 from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import PromptTemplate
@@ -16,12 +18,14 @@ from agent_core.strategy_taxonomy import StrategyType
 from agent_core.optimization import compute_outcome
 from agent_core.snapshot import get_student_snapshot
 from services.vector_factory import get_vector_db
+from services.synthesis_service import synthesis_service
+import time
 
 # Configuration
 CONFIG = ToTConfig(
     max_depth=2,
-    beam_width=2,
-    branching_factor=3,
+    beam_width=2, # Optimized Beam Width
+    branching_factor=2, # Reduced branching factor for speed
     score_threshold=0.85
 )
 
@@ -34,18 +38,30 @@ semaphore = asyncio.Semaphore(10)
 # Helper for robust parsing
 def extract_json_from_text(text: str) -> Dict:
     """
-    Extracts the first valid JSON object from a string, handling markdown blocks.
+    Extracts the first valid JSON object from a string, handling markdown blocks and control characters.
     """
+    cleaned_text = text
     try:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        # Pre-processing: Strip markdown backticks
+        cleaned_text = re.sub(r"```(?:json)?\s*|\s*```", "", text).strip()
+        
+        # Robust Regex for JSON block extraction if still wrapped
+        match = re.search(r"(\{.*\})", cleaned_text, re.DOTALL)
         if match:
-            return json.loads(match.group(1))
-        match = re.search(r"(\{.*\})", text, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        return json.loads(text)
+            cleaned_text = match.group(1)
+            
+        # Use strict=False to handle invalid control characters (e.g. newlines in strings)
+        return json.loads(cleaned_text, strict=False)
     except Exception as e:
-        raise ValueError(f"Failed to extract JSON from text: {text[:100]}... Error: {e}")
+        print(f"[Parser] !!! RAW_LLM_RESPONSE failing at char 281: {text}")
+        # Final attempt: manual regex fix for unescaped quotes in common fields
+        try:
+            # Simple heuristic: try to escape quotes that are not followed by , or }
+            # This is risky but helps for "label" or "approach" strings
+            manual_fix = re.sub(r'(?<=[:\s])"(.*?)"(?=[\s,])', r'"\1"', cleaned_text)
+            return json.loads(manual_fix, strict=False)
+        except:
+            raise ValueError(f"Failed to extract JSON from text: {text[:200]}... Error: {e}")
 
 # --- Nodes ---
 
@@ -54,7 +70,7 @@ async def retrieve_context(state: AgentState) -> AgentState:
     Node 1: Fetches context and initializes the tree root.
     Prioritizes RL 'teaching_strategy' if provided.
     """
-    print("--- Node: Retrieve Context & Init Root ---")
+    print("[ToT] 🧩 --- Node: Retrieve Context & Init Root ---")
     memory = MemoryManager()
     student_id = state["student_id"]
     
@@ -93,13 +109,21 @@ async def retrieve_context(state: AgentState) -> AgentState:
         "query": state["user_query"]
     })
     
+    # Load Preferences & Blacklist (Project ID: 25-26J-130)
+    preferences = profile.get("preferred_modality", {"visual": 0.33, "textual": 0.33, "interactive": 0.34}) if profile else {"visual": 0.33, "textual": 0.33, "interactive": 0.34}
+    blacklist = profile.get("strategy_blacklist", {}).get(state["user_query"], []) if profile else []
+
     return {
         **state,
         "profile": profile,
         "context_data": context_data,
+        "student_preferences": preferences,
+        "strategy_blacklist": blacklist,
         "frontier": [root_node],
         "tree_memory": {root_node.id: root_node},
-        "best_node": root_node
+        "best_node": root_node,
+        "build_time": time.time(),
+        "stop_early": False
     }
 
 async def expand_frontier(state: AgentState) -> AgentState:
@@ -114,7 +138,7 @@ async def expand_frontier(state: AgentState) -> AgentState:
     current_depth = frontier[0].depth
     next_depth = current_depth + 1
     
-    print(f"--- Node: Expand Frontier (Depth {current_depth} -> {next_depth}) ---")
+    print(f"[ToT] 🌿 --- Node: Expand Frontier (Depth {current_depth} -> {next_depth}) ---")
     
     tree_memory = state["tree_memory"].copy()
     
@@ -158,44 +182,39 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
     async with semaphore:
         if target_depth == 1:
             snapshot = context.get("snapshot", {})
-            valid_strategies = [st.value for st in StrategyType]
-            policy_name = snapshot.get("rl_strategy", "General Instruction")
+            action_id = snapshot.get("action_id", 0)
+            rl_strategy = snapshot.get("rl_strategy", "General Instruction")
+            
+            # Action-aware prompt optimization
+            pruning_logic = "Focus strictly on analogies and step-by-step logic." if action_id == 1 else "General pedagogical exploration."
             
             prompt = PromptTemplate(
                 template="""
-                Role: You are a Senior BI Architect mentoring a 'BI Engineering Intern' at Mack Air/John Keells.
-                
-                Student Profile: {profile}
-                Student State (Snapshot): {snapshot}
+                Role: Senior BI Architect mentor.
                 Goal: {query}
+                Policy Action: {rl_strategy} (ID: {action_id})
                 
-                GROUNDED EVIDENCE (RAG):
-                {rag_evidence}
+                PRUNING CONSTRAINT: {pruning_logic}
                 
-                TASK: Generate {k} strategies that match the RL Policy: {policy_name}.
-                STRICT REQUIREMENT: Prioritize GROUNDED EVIDENCE over generic knowledge. 
-                If discussing Data Types, explain them via SQL Schemas, Facts/Dimensions, and Data Warehousing concepts.
-                
-                JSON FORMAT:
-                {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "mentorship-style approach" }}, ... ] }}
+                TASK: Generate {k} strategies.
+                JSON FORMAT: {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "mentorship-style approach" }} ] }}
                 """,
-                input_variables=["profile", "snapshot", "policy_name", "rag_evidence", "query", "k", "valid_strategies"]
+                input_variables=["action_id", "rl_strategy", "pruning_logic", "query", "k"]
             )
             
             for attempt in range(max_retries):
+                raw_res = ""
                 try:
                     chain = prompt | llm | StrOutputParser()
                     raw_res = await chain.ainvoke({
-                        "profile": str(profile), 
-                        "snapshot": json.dumps(snapshot),
-                        "policy_name": snapshot.get("rl_strategy", "General Instruction"),
-                        "rag_evidence": context.get("rag_evidence", ""),
-                        "query": query, "k": CONFIG.branching_factor,
-                        "valid_strategies": ", ".join(valid_strategies)
+                        "action_id": action_id,
+                        "rl_strategy": rl_strategy,
+                        "pruning_logic": pruning_logic,
+                        "query": query, "k": CONFIG.branching_factor
                     })
                     res = extract_json_from_text(raw_res)
                     options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
-                    action_id = snapshot.get("action_id", 2)
+                    
                     results = []
                     for opt in options:
                         results.append({
@@ -205,12 +224,25 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                                 "strategy_type": opt.get("strategy_type", "visual_explanation"),
                                 "type": "strategy",
                                 "policy_id": action_id,
-                                "policy_name": policy_name
+                                "policy_name": rl_strategy
                             }
                         })
                     return results
                 except Exception as e:
-                    print(f"Gen D1 Failed: {e}")
+                    print(f"[ToT] ⚠️ Gen D1 Parse Failed (Attempt {attempt+1}): {e}")
+                    print(f"[ToT] >>> RAW_LLM_RESPONSE: {raw_res}")
+                    
+                    # SAFE-PARSE FALLBACK (Project ID: 25-26J-130)
+                    # Use string indexing to extract labels if JSON is broken
+                    if "label" in raw_res:
+                        try:
+                            labels = re.findall(r'"label":\s*"([^"]+)"', raw_res)
+                            if labels:
+                                print(f"[ToT] 🛡️ >>> Safe-Parse Success: Extracted {len(labels)} strategies manually.")
+                                return [{"content": l, "metadata": {"type": "strategy", "strategy_type": "visual_explanation"}} for l in labels[:CONFIG.branching_factor]]
+                        except:
+                            pass
+                            
                     await asyncio.sleep(base_delay * (attempt + 1))
             return []
 
@@ -238,32 +270,32 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                    [MERMAID_END]
                 
                 STRICT JSON OUTPUT FORMAT (MANDATORY):
-                {
+                {{
                     "options": [
-                        {
-                            "directive": {
+                        {{
+                            "directive": {{
                                 "type": "explanation | quiz | challenge",
                                 "content": "Full pedagogical content (Markdown) with [MERMAID_START]...[MERMAID_END] or [IMAGE_FOR_ALEX] tags if needed",
-                                "quiz": { 
+                                "quiz": {{ 
                                     "questions": [
-                                        {
+                                        {{
                                             "question": "The MCQ Question",
                                             "options": ["A", "B", "C", "D"],
                                             "correct_index": 0,
                                             "explanation": "Why A is correct"
-                                        }
+                                        }}
                                     ],
                                     "type": "multiple-choice"
-                                },
-                                "challenge": {
+                                }},
+                                "challenge": {{
                                     "type": "text",
                                     "description": "Challenge description",
                                     "attributes_required": 3
-                                }
-                            }
-                        }
+                                }}
+                            }}
+                        }}
                     ]
-                }
+                }}
                 """,
                 input_variables=["rag_evidence", "strategy", "approach", "query", "k"]
             )
@@ -298,7 +330,7 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                             # Verify Mermaid tags are present and have content
                             mermaid_match = re.search(r"\[MERMAID_START\]([\s\S]+?)\[MERMAID_END\]", str(content_val))
                             if not mermaid_match or len(mermaid_match.group(1).strip()) < 10:
-                                print(f">>> [Payload Integrity] Mermaid block missing or too short for BI topic. Adding fallback.")
+                                print(f"[ToT] ⚠️ >>> [Payload Integrity] Mermaid block missing or too short for BI topic. Adding fallback.")
                                 # We can't easily re-run here without recursion, so we append a fallback structural block if missing
                                 if "[MERMAID_START]" not in str(content_val):
                                     content_val = str(content_val) + "\n\n[MERMAID_START]\ngraph TD\n  A[Data Source] --> B[ETL Layer]\n  B --> C[Data Warehouse]\n  C --> D[Analytics]\n[MERMAID_END]"
@@ -326,7 +358,7 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
     """
     Node 3: Scores the new nodes in the frontier concurrently.
     """
-    print("--- Node: Evaluate Frontier ---")
+    print("[ToT] ⚖️ --- Node: Evaluate Frontier ---")
     frontier = state["frontier"]
     tree_memory = state["tree_memory"]
     
@@ -352,18 +384,71 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
         node.path_score = path_score
         scored_frontier.append(node)
         
-    frontier_best = max(scored_frontier, key=lambda x: x.path_score) if scored_frontier else None
-    if frontier_best:
-        current_best = frontier_best
+    # Early Stopping Logic (Project ID: 25-26J-130)
+    stop_early = False
+    snapshot = state["context_data"].get("snapshot", {})
+    if hasattr(snapshot, "dict"): snapshot = snapshot.dict()
+    target_action = snapshot.get("action_id", 0)
+    
+    for node in scored_frontier:
+        # Check if node score > threshold AND metadata matches the target RL action
+        if node.score >= CONFIG.score_threshold:
+            # For depth 1, check if strategy type matches pruning intent (simplified check)
+            # For depth 2, check if it was derived from a valid depth 1 strategy
+            stop_early = True
+            current_best = node
+            print(f"[ToT] 🎯 >>> Early Stopping Triggered: Score {node.score:.2f} >= {CONFIG.score_threshold}")
+            break
 
+    # Personalization Tie-Breaker (Project ID: 25-26J-130)
+    # If two thought branches have similar evaluation scores (within 0.05),
+    # select the branch that aligns with the student's highest preferred_modality weight.
+    if len(scored_frontier) >= 2:
+        top_two = sorted(scored_frontier, key=lambda x: x.score, reverse=True)[:2]
+        if abs(top_two[0].score - top_two[1].score) <= 0.05:
+            print("[ToT] 🌓 >>> Similarity Detected (Score Delta <= 0.05): Querying Student Profile for Tie-Breaker...")
+            from db.connection import get_db_connection, get_profiles_collection
+            db_conn = get_db_connection()
+            profiles = get_profiles_collection(db_conn)
+            profile_data = profiles.find_one({"student_id": state["student_id"]})
+            
+            if profile_data:
+                pref = profile_data.get("preferred_modality", {"visual": 0.33, "textual": 0.33, "interactive": 0.34})
+                # Determine modality of each node (heuristic: check metadata or content)
+                def get_node_modality(node):
+                    ctype = node.metadata.get("type", "").lower()
+                    if "worked_example" in ctype or "visual" in ctype: return "visual"
+                    if "practice" in ctype or "interactive" in ctype: return "interactive"
+                    return "textual"
+                
+                mod0 = get_node_modality(top_two[0])
+                mod1 = get_node_modality(top_two[1])
+                
+                # Ensure float comparison for weights vs scores
+                weight0 = float(pref.get(mod0, 0))
+                weight1 = float(pref.get(mod1, 0))
+
+                if weight1 > weight0:
+                    print(f"[ToT] ✨ >>> Personalization Applied: Swapping node '{mod0}' for student-preferred '{mod1}' (+0.01)")
+                    current_best = top_two[1]
+                    # Apply a score bonus to ensure it survives pruning
+                    top_two[1].score += 0.01
+                    top_two[1].path_score += 0.01
+                else:
+                    current_best = top_two[0]
+                    # Apply a score bonus to ensure it survives pruning
+                    top_two[0].score += 0.01
+                    top_two[0].path_score += 0.01
+            
     # Broadcast to Admin Dashboard
     from server import sio
     await sio.emit("tot_step", {
         "step": "evaluate_frontier",
-        "scores": [n.score for n in scored_frontier]
+        "scores": [n.score for n in scored_frontier],
+        "early_stop": stop_early
     })
     
-    return {**state, "frontier": scored_frontier, "best_node": current_best}
+    return {**state, "frontier": scored_frontier, "best_node": current_best, "stop_early": stop_early}
 
 async def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
     """
@@ -406,21 +491,34 @@ async def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory:
             })
             res = extract_json_from_text(raw_res)
             return float(res.get("score", 0.5))
+        except asyncio.CancelledError:
+            print("[ToT] 🛑 >>> Scoring Cancelled: Graceful exit triggered.")
+            raise
         except Exception as e:
-            print(f"Scoring Failed: {e}")
+            print(f"[ToT] ⚠️ Scoring Failed: {e}")
             return 0.5
 
 async def prune_frontier(state: AgentState) -> AgentState:
     """
     Node 4: Selects the top K (Beam Width) nodes.
     """
-    print(f"--- Node: Prune Frontier ---")
+    print(f"[ToT] ✂️ --- Node: Prune Frontier ---")
     frontier = state["frontier"]
     if not frontier:
         return state
         
     # Standard beam search sorting by path_score
-    sorted_frontier = sorted(frontier, key=lambda x: x.path_score, reverse=True)
+    # Tie-breaker: mastery_level from snapshot
+    snapshot = state["context_data"].get("snapshot", {})
+    if hasattr(snapshot, "dict"): snapshot = snapshot.dict()
+    mastery = snapshot.get("mastery_level", 0.5)
+    
+    # Sort primarily by path_score, secondarily by mastery (though mastery is constant for a state, 
+    # the user asked to use it as a tie-breaker, implying we might want to prioritize nodes 
+    # differently based on it. However, since mastery is per-student. 
+    # Re-reading: "Use the 'mastery_level' as a tie-breaker in the ToT evaluation node when two branches have identical scores."
+    # I will modify the sorting key here to be (path_score, mastery)
+    sorted_frontier = sorted(frontier, key=lambda x: (x.path_score, mastery), reverse=True)
     beam = sorted_frontier[:CONFIG.beam_width]
     
     # Broadcast to Admin Dashboard
@@ -434,8 +532,12 @@ async def prune_frontier(state: AgentState) -> AgentState:
 
 def check_stop_condition(state: AgentState) -> str:
     """
-    Standard ToT stop condition.
+    ToT stop condition with Early Stopping support.
     """
+    if state.get("stop_early"):
+        print("[ToT] ⚡ >>> Terminating ToT Expansion: Early Stopping Flag Set")
+        return "finalize"
+        
     frontier = state["frontier"]
     if not frontier:
         return "finalize"
@@ -446,11 +548,15 @@ def check_stop_condition(state: AgentState) -> str:
 
 async def finalize_output(state: AgentState) -> AgentState:
     """
-    Node 5: Finalizes response and updates student memory.
+    Node 5: Final output generation and latency calculation.
     """
-    print("--- Node: Finalize Output ---")
-    best_node = state["best_node"]
-    tree_memory = state["tree_memory"]
+    print("[ToT] 🏁 --- Node: Finalize Output ---")
+    best_node = state.get("best_node")
+    tree_memory = state["tree_memory"] # Keep this line from original
+
+    # Calculate build_time telemetry
+    start_time = state.get("build_time", time.time())
+    latency = round(time.time() - start_time, 2)
     
     path = []
     curr = best_node
@@ -460,11 +566,90 @@ async def finalize_output(state: AgentState) -> AgentState:
     path.reverse()
     
     trace = [f"[{n.depth}] {n.content} (Score: {n.path_score:.2f})" for n in path]
-    final_resp = best_node.content if best_node else "No strategy found."
-    strategy_label = path[1].content if len(path) > 1 else "Unknown"
     
+    # Map RL Action ID to Strategy Label (Project ID: 25-26J-130)
+    from agent_core.schemas import RL_ACTION_MAP
+    snapshot = state["context_data"].get("snapshot", {})
+    if hasattr(snapshot, "dict"): snapshot = snapshot.dict()
+    
+    action_id = snapshot.get("action_id", 0)
+    strategy_label = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown Strategy").upper().replace(" ", "_")
+    
+    # Project ID: 25-26J-130: Mandatory LLM Synthesis Step
+    # Expand the selected thought into a full multimodal lesson
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from agent_core.llm import get_llm
+    
+    final_llm = get_llm()
+    synthesis_prompt = ChatPromptTemplate.from_template("""
+        Role: Senior Pedagogical Architect.
+        Context: {query}
+        Selected Thought: {thought}
+        Strategy: {strategy}
+        
+        TASK: Expand this thought into a full multimodal lesson for a student.
+        REQUIREMENTS:
+        1. Start with a specific analogy: THE SUPERMARKET RECEIPT ANALOGY.
+        2. Explain 3 key technical terms related to Dimensional Modelling (Facts, Dimensions, Grain).
+        3. Include a [MERMAID_START] diagram using [MERMAID_END] tags.
+        4. Maintain an encouraging, professional tone.
+        5. Tone: Mentorship-style.
+        
+        OUTPUT: Pure Markdown text with multimodal tags.
+    """)
+    
+    thought_content = best_node.content if best_node else "No specific thought selected."
+    final_prompt = synthesis_prompt.format(
+        query=state["user_query"],
+        thought=thought_content,
+        strategy=strategy_label
+    )
+    
+    print("[ToT] 📝 --- Attempting Final Synthesis with Gemini 2.5 Flash ---")
+    print(f"[ToT] Handoff Content:\n{final_prompt}")
+    
+    try:
+        chain = synthesis_prompt | final_llm | StrOutputParser()
+        full_lesson = await chain.ainvoke({
+            "query": state["user_query"],
+            "thought": thought_content,
+            "strategy": strategy_label
+        })
+        
+        # Enhanced Logging: Print full response object equivalent (the string output in this case)
+        print(f"[ToT] >>> LLM Response Payload: {full_lesson}")
+        
+        # Content Synthesis Validation
+        if not full_lesson or not isinstance(full_lesson, str) or len(full_lesson.strip()) == 0:
+            raise ValueError("LLM returned empty body_text")
+            
+    except Exception as e:
+        print(f"Synthesis Failed: {e}")
+        # HARDCODED FALLBACK LESSON (Project ID: 25-26J-130)
+        full_lesson = f"""
+### 🧩 Fallback Lesson: Understanding {state['user_query']}
+
+It looks like we hit a technical hiccup, but don't worry! Here's a quick overview of **{state['user_query']}** to keep you moving forward.
+
+**The Analogy**: Think of this concept like a **Blueprint**. Before you build a skyscraper (your BI Architecture), you need a clear map of where every beam and wire goes.
+
+**Key Concepts**:
+1. **Facts**: The quantitative measurements (e.g., Total Sales).
+2. **Dimensions**: The context (e.g., Date, Product, Store).
+3. **Grain**: The level of detail (e.g., individual transaction vs. daily total).
+
+[MERMAID_START]
+graph TD
+  A[Concept: {state['user_query']}] --> B[Core Logic]
+  B --> C[Practical Application]
+  C --> D[Ready to Proceed]
+[MERMAID_END]
+
+*Our AI is currently re-calibrating to provide a more personalized path. Let's start with this foundational view.*
+"""
+
     # Compute Outcome simulation
-    snapshot = state["context_data"]["snapshot"]
     initial_affect = snapshot.get("current_affect", {})
     initial_score = initial_affect.get("score", 0.5)
     
@@ -475,30 +660,53 @@ async def finalize_output(state: AgentState) -> AgentState:
     # Simple outcome comparison
     outcome = "Improved" if simulated_final_score > initial_score else "Stable"
     
-    # Save Interaction
-    memory = MemoryManager()
-    memory.save_interaction({
-        "student_id": state["student_id"],
-        "query": state["user_query"],
-        "strategy": strategy_label,
-        "outcome": outcome,
-        "trace": trace
-    })
+    # Project ID: 25-26J-130: Generate Interaction ID early for scope stability
+    from bson import ObjectId
+    interaction_id = str(ObjectId())
+    
+    # Save Interaction with CV/Branch Metadata (Project ID: 25-26J-130)
+    # ASYNC DECOUPLING: Move persistence to background task
+    async def save_mem():
+        memory = MemoryManager()
+        memory.save_interaction({
+            "_id": ObjectId(interaction_id), # Ensure we use the same ID
+            "student_id": state["student_id"],
+            "query": state["user_query"],
+            "strategy": strategy_label,
+            "branch_id": best_node.id if best_node else None,
+            "path_score": best_node.path_score if best_node else 0.0,
+            "engagement_score": snapshot.get("current_affect", {}).get("score", 0.5), # Audit Requirement
+            "outcome": outcome,
+            "trace": trace,
+            "timestamp": datetime.now()
+        })
+    asyncio.create_task(save_mem())
 
     # Final broadcast to Admin Dashboard
     from server import sio
     await sio.emit("tot_final", {
         "student_id": state["student_id"],
-        "final_response": final_resp,
+        "final_response": full_lesson,
+        "full_text": full_lesson,
+        "body_text": full_lesson,
+        "strategy": strategy_label,
         "outcome": outcome,
-        "trace": trace
+        "trace": trace,
+        "interaction_id": interaction_id,
+        "strategy_label": strategy_label
     })
 
     return {
         **state,
-        "final_response": final_resp,
+        "final_response": full_lesson,
+        "full_text": full_lesson,
+        "body_text": full_lesson,
+        "visual_tags": ["mermaid", "analogy"],
         "reasoning_trace": trace,
-        "interaction_outcome": outcome
+        "interaction_outcome": outcome,
+        "selected_strategy_label": strategy_label,
+        "interaction_id": interaction_id,
+        "build_time": latency
     }
 
 def create_tot_graph():

@@ -6,37 +6,29 @@ from mocks.data_generators import get_mock_student_profile
 class MemoryManager:
     def __init__(self):
         self.db = get_db_connection()
-        self.students = get_students_collection(self.db)
+        from db.connection import get_profiles_collection
+        self.profiles = get_profiles_collection(self.db)
         self.interactions = get_interactions_collection(self.db)
 
     def get_student_profile(self, student_id: str) -> Dict[str, Any]:
         """
         Retrieves student profile from DB. 
         Falls back to mock if not found or DB unavailable.
-        Ensures 'learning_preferences' field exists.
+        Ensures 'preferred_modality' field exists.
         """
         profile = None
-        if self.students is not None:
-            profile = self.students.find_one({"student_id": student_id})
+        if self.profiles is not None:
+            profile = self.profiles.find_one({"student_id": student_id})
             if profile and "_id" in profile:
                 del profile["_id"]
         
         if not profile:
-            print(f"Memory: Student {student_id} not found in DB (or DB unavailable). Using mock.")
+            print(f"Memory: Student {student_id} not found in DB. Using mock.")
             profile = get_mock_student_profile(student_id, randomized=False)
 
-        # Ensure learning_preferences exists
-        if "learning_preferences" not in profile:
-            from agent_core.strategy_taxonomy import StrategyType
-            profile["learning_preferences"] = {
-                st.value: {
-                    "confidence": 0.5,
-                    "trials": 0,
-                    "successes": 0,
-                    "last_updated": None
-                }
-                for st in StrategyType
-            }
+        # Ensure preferred_modality exists (Project ID: 25-26J-130)
+        if "preferred_modality" not in profile:
+            profile["preferred_modality"] = {"visual": 0.33, "textual": 0.33, "interactive": 0.34}
         
         return profile
 
@@ -72,9 +64,10 @@ class MemoryManager:
         )
         print(f"Memory: Updated preference for {strategy_type} -> {stat['confidence']:.2f}")
 
-    def save_interaction(self, interaction_data: Dict[str, Any]):
+    def save_interaction(self, interaction_data: Dict[str, Any]) -> Optional[str]:
         """
         Logs the interaction to the database.
+        Returns the interaction ID.
         """
         if self.interactions is not None:
             # Ensure timestamp is present
@@ -82,12 +75,14 @@ class MemoryManager:
                 interaction_data["timestamp"] = datetime.now()
             
             try:
-                self.interactions.insert_one(interaction_data)
-                print("Memory: Interaction saved to DB.")
+                result = self.interactions.insert_one(interaction_data)
+                print(f"Memory: Interaction saved to DB (ID: {result.inserted_id}).")
+                return str(result.inserted_id)
             except Exception as e:
                 print(f"Memory: Failed to save interaction: {e}")
         else:
             print("Memory: DB unavailable. Interaction not saved.")
+        return None
 
     def get_recent_history(self, student_id: str, limit: int = 5) -> List[Dict[str, Any]]:
         """

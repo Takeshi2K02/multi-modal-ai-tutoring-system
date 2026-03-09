@@ -3,16 +3,17 @@ from pydantic import BaseModel, Field
 import uuid
 
 
-# RL Policy -> Allowed Execution Strategies Mapping
+# RL Policy -> Allowed Execution Strategies Mapping (Project ID: 25-26J-130)
 RL_ACTION_MAP = {
-    0: {"name": "Provide hint", "allowed": ["socratic_hint", "visual_hint", "worked_example_hint"]},
-    1: {"name": "Worked example", "allowed": ["step_by_step", "demonstration", "scaffolded_demo"]},
-    2: {"name": "Practice quiz", "allowed": ["mini_quiz", "concept_check", "knowledge_retrieval"]},
-    3: {"name": "Challenge problem", "allowed": ["advanced_application", "problem_solving", "extension"]},
-    4: {"name": "Modality shift", "allowed": ["video_to_interactive", "text_to_visual", "hands_on"]},
-    5: {"name": "Short break", "allowed": ["mindful_reset", "breather", "topic_switch"]},
-    6: {"name": "Personalized feedback", "allowed": ["empathetic_correction", "constructive_critique"]},
-    7: {"name": "Adaptive difficulty", "allowed": ["dynamic_scaffolding", "complexity_tuning"]}
+    0: {"name": "Maintain Current Content", "type": "baseline"},
+    1: {"name": "Simplify Explanation", "type": "remediation"},
+    2: {"name": "Provide Worked Example", "type": "demonstration"},
+    3: {"name": "Generate Practice Question", "type": "assessment"},
+    4: {"name": "Switch Learning Mode", "type": "modality_shift"},
+    5: {"name": "Suggest Break", "type": "wellbeing"},
+    6: {"name": "Increase Challenge", "type": "extension"},
+    7: {"name": "Review Prerequisite", "type": "remediation"},
+    8: {"name": "Prompt Reflection", "type": "metacognition"}
 }
 
 class ThoughtNode(BaseModel):
@@ -40,6 +41,10 @@ class StudentStateSnapshot(BaseModel):
     rl_strategy: str
     performance_summary: str
     deviation_alert: bool = False
+    mastery_level: float = 0.5    # 0.0 - 1.0 (Tie-breaker for ToT)
+    session_fatigue: float = 0.0  # 0.0 - 1.0
+    confidence: float = 0.5       # From emotion_conf
+    action_id: int = 0            # RL Action (0-8)
 
 class AgentState(TypedDict):
     # Inputs
@@ -50,6 +55,8 @@ class AgentState(TypedDict):
     profile: Optional[Dict]
     context_data: Optional[Dict] # Now holds StudentStateSnapshot
     teaching_strategy: Optional[Dict] # RL Engine input
+    student_preferences: Dict[str, float]
+    strategy_blacklist: List[str]
     
     frontier: List[ThoughtNode]
     tree_memory: Dict[str, ThoughtNode]
@@ -57,4 +64,11 @@ class AgentState(TypedDict):
     
     # Output
     final_response: Optional[str]
+    body_text: Optional[str]        # Project ID: 25-26J-130
+    visual_tags: List[str]          # Project ID: 25-26J-130
     reasoning_trace: List[str]
+    build_time: float
+    stop_early: bool
+    selected_strategy_label: Optional[str]
+    interaction_outcome: Optional[str]
+    interaction_id: Optional[str]

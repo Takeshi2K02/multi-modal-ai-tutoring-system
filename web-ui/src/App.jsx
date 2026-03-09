@@ -465,6 +465,7 @@ function App() {
           key={view === 'lesson' ? `cv-${currentTopicContext?.id || 'active'}` : 'cv-idle'}
           userId="student_001"
           materialId={currentTopicContext?.title || "generic_topic"}
+          interactionId={outcome?.meta?.interaction_id}
           enabled={view === 'lesson'}
         />
 

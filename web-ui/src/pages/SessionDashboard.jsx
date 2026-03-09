@@ -16,7 +16,10 @@ import SkeletonCard from '../components/Skeletons/SkeletonCard';
  */
 const SessionDashboard = ({ onBack, onResume }) => {
     const { data, error, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/student_001`, fetcher);
+    const { data: profile } = useSWR(`${API_BASE_URL}/api/user/profile/student_001`, fetcher);
+
     const sessions = data?.sessions || [];
+    const historicalMastery = profile?.historical_mastery || {};
     const [deletingId, setDeletingId] = useState(null);
 
     const handleDeleteClick = (id) => {
@@ -175,12 +178,14 @@ const SessionDashboard = ({ onBack, onResume }) => {
                                             <div className="space-y-3">
                                                 <div className="flex justify-between items-end">
                                                     <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-bold uppercase tracking-widest transition-colors">Mastery Level</span>
-                                                    <span className="text-lg font-light text-edu-text-light dark:text-white tracking-tighter transition-colors">{session.progress.percent_complete}%</span>
+                                                    <span className="text-lg font-light text-edu-text-light dark:text-white tracking-tighter transition-colors">
+                                                        {historicalMastery[session.goal_title] || session.progress.percent_complete}%
+                                                    </span>
                                                 </div>
                                                 <div className="h-1.5 bg-zinc-100 dark:bg-zinc-950 rounded-full overflow-hidden border border-edu-border-light dark:border-white/5 transition-colors">
                                                     <motion.div
                                                         initial={{ width: 0 }}
-                                                        animate={{ width: `${session.progress.percent_complete}%` }}
+                                                        animate={{ width: `${historicalMastery[session.goal_title] || session.progress.percent_complete}%` }}
                                                         transition={{ duration: 1.5, ease: "easeOut" }}
                                                         className="h-full bg-gradient-to-r from-primary via-accent to-secondary"
                                                     />

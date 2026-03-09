@@ -1,8 +1,5 @@
-"""
-ML Models for Engagement and Content Tracking
-These are wrapper classes that will load the trained PyTorch/TensorFlow models
-"""
-
+import logging
+import contextlib
 import os
 import torch
 import torch.nn as nn
@@ -10,6 +7,22 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from transformers import pipeline
+
+class SilenceOutput:
+    """Project ID: 25-26J-130: Force absolute silence for C++ and Python logs."""
+    def __enter__(self):
+        self._stdout = os.dup(1)
+        self._stderr = os.dup(2)
+        self._devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self._devnull, 1)
+        os.dup2(self._devnull, 2)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.dup2(self._stdout, 1)
+        os.dup2(self._stderr, 2)
+        os.close(self._devnull)
+        os.close(self._stdout)
+        os.close(self._stderr)
 
 class EngagementModel:
     """
@@ -30,41 +43,36 @@ class EngagementModel:
         
     def load_model(self):
         """Load all sub-models"""
-        # Initialize emotion model with fallback
-        try:
-            # Robust path discovery for trained models
-            # Models are in cv/trained_models/engagement_emotions_vit
-            BASE_DIR_CV = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            fine_tuned_path = os.path.join(BASE_DIR_CV, 'trained_models', 'engagement_emotions_vit')
-            
-            if os.path.exists(fine_tuned_path) and os.path.isdir(fine_tuned_path):
-                print(f"Loading FINE-TUNED emotion model from: {fine_tuned_path}")
-                self.emotion_model = pipeline(
-                    "image-classification", 
-                    model=fine_tuned_path,
-                    device=-1  # Force CPU for stability
-                )
-                # Fine-tuned model directly outputs engagement emotions
-                self.use_fine_tuned = True
-                self.emotion_labels = ['frustrated', 'frustrated', 'confused', 'confident', 'focused', 'bored', 'curious']
-                # Index mapping: 0=angry→frustrated, 1=disgust→frustrated, 2=fear→confused, 
-                #                3=happy→confident, 4=neutral→focused, 5=sad→bored, 6=surprise→curious
-                print("✓ Fine-tuned emotion model loaded successfully")
-            else:
-                # Fallback to pre-trained model
-                print(f"Fine-tuned model not found at {fine_tuned_path}. Loading pre-trained: dima806/facial_emotions_image_detection")
-                self.emotion_model = pipeline(
-                    "image-classification", 
-                    model="dima806/facial_emotions_image_detection",
-                    device=-1  # Force CPU for stability
-                )
+        with SilenceOutput():
+            # Initialize emotion model with fallback
+            try:
+                # Robust path discovery for trained models
+                # Models are in cv/trained_models/engagement_emotions_vit
+                BASE_DIR_CV = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                fine_tuned_path = os.path.join(BASE_DIR_CV, 'trained_models', 'engagement_emotions_vit')
+                
+                if os.path.exists(fine_tuned_path) and os.path.isdir(fine_tuned_path):
+                    self.emotion_model = pipeline(
+                        "image-classification", 
+                        model=fine_tuned_path,
+                        device=-1  # Force CPU for stability
+                    )
+                    # Fine-tuned model directly outputs engagement emotions
+                    self.use_fine_tuned = True
+                    self.emotion_labels = ['frustrated', 'frustrated', 'confused', 'confident', 'focused', 'bored', 'curious']
+                else:
+                    # Fallback to pre-trained model
+                    self.emotion_model = pipeline(
+                        "image-classification", 
+                        model="dima806/facial_emotions_image_detection",
+                        device=-1  # Force CPU for stability
+                    )
+                    self.use_fine_tuned = False
+                    self.emotion_labels = None  # Will use mapping to engagement emotions
+            except Exception as e:
+                print(f"ERROR: Failed to load emotion model: {str(e)}")
+                self.emotion_model = None
                 self.use_fine_tuned = False
-                self.emotion_labels = None  # Will use mapping to engagement emotions
-                print("✓ Pre-trained emotion model loaded successfully")
-        except Exception as e:
-            print(f"ERROR: Failed to load emotion model: {str(e)}")
-            self.emotion_model = None
-            self.use_fine_tuned = False
         
         # Initialize MediaPipe components with error handling
         # MediaPipe 0.10.31+ uses the Tasks API (mp.tasks.vision)
@@ -87,7 +95,6 @@ class EngagementModel:
                     min_face_presence_confidence=0.3
                 )
                 self.face_landmarker = FaceLandmarker.create_from_options(fl_options)
-                print("✓ MediaPipe FaceLandmarker initialized (Tasks API, IMAGE mode)")
             else:
                 print(f"⚠️ Face model not found at {face_model_path}")
                 self.face_landmarker = None
@@ -110,7 +117,6 @@ class EngagementModel:
                     min_pose_presence_confidence=0.3
                 )
                 self.pose_landmarker = PoseLandmarker.create_from_options(pl_options)
-                print("✓ MediaPipe PoseLandmarker initialized (Tasks API, IMAGE mode)")
             else:
                 print(f"⚠️ Pose model not found at {pose_model_path}")
                 self.pose_landmarker = None
@@ -118,7 +124,7 @@ class EngagementModel:
             print(f"Warning: Could not initialize PoseLandmarker: {str(e)}")
             self.pose_landmarker = None
         
-        print("Engagement models loaded successfully")
+        print("[CV] 👁️  Internal Models Ready")
     
     def predict(self, frame):
         """
@@ -128,7 +134,7 @@ class EngagementModel:
             dict with emotion, gaze, posture, and confidence scores
         """
         try:
-            print(f"\n🔍 === Processing Frame ===")
+            # print(f"\n🔍 === Processing Frame ===")
             
             # Detect eye closure/drowsiness first (critical for boredom detection)
             eye_state = self.detect_eye_closure(frame)
@@ -171,7 +177,7 @@ class EngagementModel:
             # Use raw emotion detection result
             adjusted_emotion = emotion_result
             
-            print(f"📊 FINAL: emotion={adjusted_emotion['emotion']}, gaze={gaze}, posture={posture}\n")
+            # print(f"📊 FINAL: emotion={adjusted_emotion['emotion']}, gaze={gaze}, posture={posture}\n")
             
             return {
                 'emotion': adjusted_emotion['emotion'],
@@ -271,7 +277,7 @@ class EngagementModel:
             
             # Log all predictions for debugging
             model_type = "Fine-tuned" if self.use_fine_tuned else "Pre-trained"
-            print(f"[{model_type}] Raw emotion: {emotion_label} -> Mapped: {final_emotion} (confidence: {confidence:.2f})")
+            # print(f"[{model_type}] Raw emotion: {emotion_label} -> Mapped: {final_emotion} (confidence: {confidence:.2f})")
             
             return {
                 'emotion': final_emotion,
@@ -321,7 +327,7 @@ class EngagementModel:
             else:
                 eye_state = 'open'
             
-            print(f"Eye state: {eye_state} (EAR: {avg_ear:.3f})")
+            # print(f"Eye state: {eye_state} (EAR: {avg_ear:.3f})")
             return eye_state
             
         except Exception as e:
@@ -344,7 +350,7 @@ class EngagementModel:
         try:
             # If eyes are closed or drowsy, override emotion to bored
             if eye_state == 'closed':
-                print(f"Eyes closed detected: {emotion} -> bored (high confidence)")
+                # print(f"Eyes closed detected: {emotion} -> bored (high confidence)")
                 return {
                     'emotion': 'bored',
                     'confidence': 0.95  # Very high confidence when eyes are closed
@@ -354,7 +360,7 @@ class EngagementModel:
                 # Drowsy state indicates tiredness/boredom
                 # If current emotion is not already indicating disengagement, change it
                 if emotion not in ['bored', 'frustrated', 'confused']:
-                    print(f"Drowsy state detected: {emotion} -> bored")
+                    # print(f"Drowsy state detected: {emotion} -> bored")
                     return {
                         'emotion': 'bored',
                         'confidence': 0.85  # High confidence for drowsiness
@@ -363,7 +369,7 @@ class EngagementModel:
                     # Keep the emotion but increase confidence if it's bored
                     if emotion == 'bored':
                         confidence = max(confidence, 0.85)
-                    print(f"Drowsy state confirms: {emotion} (confidence boosted)")
+                    # print(f"Drowsy state confirms: {emotion} (confidence boosted)")
                     return {
                         'emotion': emotion,
                         'confidence': confidence
@@ -398,14 +404,14 @@ class EngagementModel:
                 
                 # If emotion is not already indicating confusion, change it
                 if emotion not in ['confused', 'frustrated']:
-                    print(f"Upward gaze detected: {emotion} -> confused (questioning/thinking)")
+                    # print(f"Upward gaze detected: {emotion} -> confused (questioning/thinking)")
                     return {
                         'emotion': 'confused',
                         'confidence': max(confidence, 0.80)  # High confidence for upward gaze
                     }
                 else:
                     # Already confused/frustrated, boost confidence
-                    print(f"Upward gaze confirms: {emotion} (confidence boosted)")
+                    # print(f"Upward gaze confirms: {emotion} (confidence boosted)")
                     return {
                         'emotion': emotion,
                         'confidence': max(confidence, 0.85)
@@ -446,7 +452,7 @@ class EngagementModel:
             # Significantly reduce confidence when looking away
             adjusted_confidence = min(confidence * 0.4, 0.5)  # Max 50% confidence, reduced by 60%
             
-            print(f"Gaze adjustment: {emotion} ({confidence:.2f}) -> {adjusted_emotion} ({adjusted_confidence:.2f}) [gaze: {gaze}]")
+            # print(f"Gaze adjustment: {emotion} ({confidence:.2f}) -> {adjusted_emotion} ({adjusted_confidence:.2f}) [gaze: {gaze}]")
             
             return {
                 'emotion': adjusted_emotion,
@@ -546,7 +552,7 @@ class EngagementModel:
             elif h_deviation > 0.08:
                 gaze_direction = 'right'
             
-            print(f"👁️ Gaze: {gaze_direction:>8} | nose_rx:{nose_rel_x:.3f} nose_ry:{nose_rel_y:.3f} | h_dev:{h_deviation:+.3f} v_dev:{v_deviation:+.3f}")
+            # print(f"👁️ Gaze: {gaze_direction:>8} | nose_rx:{nose_rel_x:.3f} nose_ry:{nose_rel_y:.3f} | h_dev:{h_deviation:+.3f} v_dev:{v_deviation:+.3f}")
             return gaze_direction
             
         except Exception as e:
@@ -605,7 +611,7 @@ class EngagementModel:
                     else:
                         posture = 'upright'
                     
-                    print(f"🧍 Posture(pose): {posture:>15} | head_v:{head_v:.3f} head_h:{head_h:.3f} sh_tilt:{sh_tilt:.3f}")
+                    # print(f"🧍 Posture(pose): {posture:>15} | head_v:{head_v:.3f} head_h:{head_h:.3f} sh_tilt:{sh_tilt:.3f}")
                     return posture
             
             # FALLBACK: Use FaceLandmarker to estimate posture from face position
@@ -635,7 +641,7 @@ class EngagementModel:
                 else:
                     posture = 'upright'
                 
-                print(f"🧍 Posture(face): {posture:>15} | face_y:{face_center_y:.3f} face_x:{face_center_x:.3f} tilt:{face_tilt:.3f} z:{nose_z:.3f}")
+                # print(f"🧍 Posture(face): {posture:>15} | face_y:{face_center_y:.3f} face_x:{face_center_x:.3f} tilt:{face_tilt:.3f} z:{nose_z:.3f}")
                 return posture
             
             print(f"⚠️ No pose/face detected for posture | shape:{frame.shape} mean:{frame.mean():.0f}")
@@ -658,16 +664,16 @@ class ContentModel:
     
     def load_model(self):
         """Load topic classification model"""
-        try:
-            # Using zero-shot classification for topic detection
-            self.topic_classifier = pipeline(
-                "zero-shot-classification",
-                model="facebook/bart-large-mnli",
-                device=0 if torch.cuda.is_available() else -1
-            )
-            print("Content model loaded successfully")
-        except Exception as e:
-            print(f"Error loading content model: {str(e)}")
+        with SilenceOutput():
+            try:
+                # Using zero-shot classification for topic detection
+                self.topic_classifier = pipeline(
+                    "zero-shot-classification",
+                    model="facebook/bart-large-mnli",
+                    device=0 if torch.cuda.is_available() else -1
+                )
+            except Exception as e:
+                print(f"Error loading content model: {str(e)}")
     
     def predict(self, text):
         """

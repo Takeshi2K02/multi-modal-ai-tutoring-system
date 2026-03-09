@@ -7,6 +7,18 @@ import io
 import easyocr
 from services.ml_models import EngagementModel, ContentModel
 
+import logging
+import contextlib
+
+# Project ID: 25-26J-130: CV Stability Configuration
+_emotion_buffer = [] 
+_last_valid_result = {
+    'emotion': 'neutral',
+    'engagement_score': 0.5,
+    'gaze': 'forward',
+    'posture': 'upright'
+}
+
 # Initialize models (loaded once)
 engagement_model = None
 content_model = None
@@ -90,10 +102,22 @@ def process_engagement_data(frame_data, screen_data=None, material_id=None):
         # Create engagement context state
         engagement_context_state = f"{engagement_result['emotion']}_on_{context_match}" if context_match else engagement_result['emotion']
         
+        # CV JITTER FILTERING & STABILITY BUFFER (Project ID: 25-26J-130)
+        global _emotion_buffer, _last_valid_result
+        _emotion_buffer.append(engagement_result['emotion'])
+        if len(_emotion_buffer) > 3:
+            _emotion_buffer.pop(0)
+            
+        # Only change "official" state if 3 consecutive frames match
+        if len(_emotion_buffer) == 3 and len(set(_emotion_buffer)) == 1:
+            stable_emotion = _emotion_buffer[0]
+        else:
+            stable_emotion = _last_valid_result['emotion']
+
         # Format response
         result = {
             'timestamp': None,  # Will be set by caller
-            'emotion': engagement_result['emotion'],
+            'emotion': stable_emotion,
             'emotion_conf': round(engagement_result['emotion_confidence'], 2),
             'engagement_score': round(engagement_score, 2),
             'engagement_state': engagement_state,
@@ -101,25 +125,34 @@ def process_engagement_data(frame_data, screen_data=None, material_id=None):
             'posture': engagement_result['posture'],
             'ocr_excerpt': ocr_excerpt,
             'context_match': context_match,
-            'engagement_context_state': engagement_context_state
+            'engagement_context_state': f"{stable_emotion}_on_{context_match}" if context_match else stable_emotion
+        }
+        
+        # Update last valid result for fallback
+        _last_valid_result = {
+            'emotion': stable_emotion,
+            'engagement_score': round(engagement_score, 2),
+            'gaze': engagement_result['gaze'],
+            'posture': engagement_result['posture']
         }
         
         return result
         
     except Exception as e:
         print(f"Error processing engagement data: {str(e)}")
-        # Return default values on error
+        # Project ID: 25-26J-130: GAZE FALLBACK LOGIC
+        # Return last known valid result instead of hardcoded defaults
         return {
             'timestamp': None,
-            'emotion': 'unknown',
+            'emotion': _last_valid_result['emotion'],
             'emotion_conf': 0.0,
-            'engagement_score': 0.5,
+            'engagement_score': _last_valid_result['engagement_score'],
             'engagement_state': 'unknown',
-            'gaze': 'unknown',
-            'posture': 'unknown',
+            'gaze': _last_valid_result['gaze'],
+            'posture': _last_valid_result['posture'],
             'ocr_excerpt': None,
             'context_match': None,
-            'engagement_context_state': 'unknown'
+            'engagement_context_state': _last_valid_result['emotion']
         }
 
 def extract_text_from_screen(screen_frame):
@@ -198,13 +231,13 @@ def calculate_engagement_score(engagement_result):
     final_score = max(0.0, min(1.0, score))
     
     # Log scoring breakdown for debugging (occasional logging)
-    if np.random.random() < 0.15:  # 15% of frames
-        emotion_contrib = (emotion_score - 0.5) * 0.6
-        print(f"\n📊 Engagement Score Breakdown:")
-        print(f"   Emotion: {engagement_result['emotion']} ({emotion_score:.2f}) → {emotion_contrib:+.2f}")
-        print(f"   Gaze: {engagement_result['gaze']} → {gaze_contribution:+.2f}")
-        print(f"   Posture: {engagement_result['posture']} → {posture_contribution:+.2f}")
-        print(f"   Final Score: {final_score:.2f}")
+    # if np.random.random() < 0.15:  # 15% of frames
+    #     emotion_contrib = (emotion_score - 0.5) * 0.6
+    #     print(f"\n📊 Engagement Score Breakdown:")
+    #     print(f"   Emotion: {engagement_result['emotion']} ({emotion_score:.2f}) → {emotion_contrib:+.2f}")
+    #     print(f"   Gaze: {engagement_result['gaze']} → {gaze_contribution:+.2f}")
+    #     print(f"   Posture: {engagement_result['posture']} → {posture_contribution:+.2f}")
+    #     print(f"   Final Score: {final_score:.2f}")
     
     return final_score
 

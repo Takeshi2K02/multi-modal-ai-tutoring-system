@@ -1,9 +1,12 @@
 import os
 import time
+import warnings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 
-# Load environment variables
+# Suppress LangChain noise
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+
 load_dotenv()
 
 def get_llm():
@@ -27,13 +30,13 @@ def get_llm():
         )
     
     # Default to Gemini (AI Studio)
-    print("--- Using Cloud LLM: Google Gemini (AI Studio) ---")
+    print("--- Using Cloud LLM: Google Gemini 2.5 Flash (AI Studio) ---")
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         print("WARNING: GOOGLE_API_KEY not found. Gemini calls may fail.")
         
     return ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-exp",
+        model="gemini-2.5-flash",
         temperature=0.7,
         google_api_key=api_key
     )
