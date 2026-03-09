@@ -14,7 +14,7 @@ def get_dashboard():
         
         # Time range (default: last 7 days)
         days = request.args.get('days', default=7, type=int)
-        since = datetime.utcnow() - timedelta(days=days)
+        since = datetime.now() - timedelta(days=days)
         
         # Get engagement logs
         engagement_logs = EngagementLog.find_by_user(user_id, limit=1000)

@@ -24,6 +24,8 @@ class InteractionLog(BaseModel):
     cv_state: str
     rl_hint: str
     response_text: str
+    estimated_reading_time: int = 120 # Default 2 minutes
+    is_completed: bool = False
 
 class AgentState(TypedDict):
     # Inputs

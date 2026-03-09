@@ -45,6 +45,7 @@ class StudentStateSnapshot(BaseModel):
     session_fatigue: float = 0.0  # 0.0 - 1.0
     confidence: float = 0.5       # From emotion_conf
     action_id: int = 0            # RL Action (0-8)
+    intervention_needed: bool = False
 
 class AgentState(TypedDict):
     # Inputs
@@ -72,3 +73,6 @@ class AgentState(TypedDict):
     selected_strategy_label: Optional[str]
     interaction_outcome: Optional[str]
     interaction_id: Optional[str]
+    shadow_frontier: List[ThoughtNode]
+    is_completed: bool
+    estimated_reading_time: int

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { clsx } from 'clsx';
+import { io } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LayoutDashboard, BookOpen, BrainCircuit, Upload, Layers, ChevronRight, ChevronLeft, User, Database, Camera, Bot } from 'lucide-react';
 import useSWR from 'swr';
@@ -21,6 +22,8 @@ import DataDashboard from './pages/DataDashboard';
 import LearningLayout from './components/LearningLayout';
 import LiveAffectSensing from './components/LiveAffectSensing';
 import { ThemeProvider } from './context/ThemeContext';
+
+const socket = io('http://localhost:8000');
 
 function App() {
   const [view, setView] = useState('decomposition'); // Default: 'decomposition'
@@ -252,6 +255,7 @@ function App() {
               setView('curriculum');
             }}
             onReady={() => setIsLessonReady(true)}
+            sio={socket}
           />
         );
 
@@ -463,7 +467,7 @@ function App() {
         {/* Global Live CV Monitor - Survives sub-component crashes */}
         <LiveAffectSensing
           key={view === 'lesson' ? `cv-${currentTopicContext?.id || 'active'}` : 'cv-idle'}
-          userId="student_001"
+          userId="alex_123"
           materialId={currentTopicContext?.title || "generic_topic"}
           interactionId={outcome?.meta?.interaction_id}
           enabled={view === 'lesson'}

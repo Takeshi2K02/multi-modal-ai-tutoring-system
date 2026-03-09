@@ -53,7 +53,7 @@ class User:
             'username': username,
             'email': email,
             'password_hash': password_hash,
-            'created_at': datetime.utcnow()
+            'created_at': datetime.now()
         }
         result = db.users.insert_one(user_data)
         user_data['_id'] = result.inserted_id
@@ -92,7 +92,7 @@ class LearningQuery:
             'user_id': user_id,
             'query_text': query_text,
             'suggested_materials': suggested_materials or [],
-            'created_at': datetime.utcnow()
+            'created_at': datetime.now()
         }
         result = db.learning_queries.insert_one(query_data)
         query_data['_id'] = result.inserted_id
@@ -126,7 +126,7 @@ class Material:
             'url': url,
             'topic': topic,
             'description': description,
-            'created_at': datetime.utcnow()
+            'created_at': datetime.now()
         }
         result = db.materials.insert_one(material_data)
         material_data['_id'] = result.inserted_id
@@ -164,7 +164,7 @@ class MaterialAccess:
             'user_id': user_id,
             'material_id': material_id,
             'query_id': query_id,
-            'access_time': datetime.utcnow(),
+            'access_time': datetime.now(),
             'duration_seconds': duration_seconds
         }
         result = db.material_access.insert_one(access_data)
@@ -199,7 +199,7 @@ class EngagementLog:
         log_data = {
             'user_id': user_id,
             'material_id': material_id,
-            'timestamp': datetime.utcnow(),
+            'timestamp': datetime.now(),
             'emotion': emotion,
             'emotion_conf': emotion_conf,
             'engagement_score': engagement_score,

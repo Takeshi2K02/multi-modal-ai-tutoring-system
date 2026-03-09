@@ -40,7 +40,7 @@ const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
         setIsEvaluating(true);
         try {
             const result = await evaluateChallenge({
-                student_id: "student_001",
+                student_id: "alex_123",
                 session_id: sessionId,
                 topic_id: topic,
                 response: response,
@@ -91,7 +91,8 @@ const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
                             className="w-full py-5 bg-primary text-white font-black rounded-full shadow-xl shadow-primary/10 hover:scale-[1.02] active:scale-95 disabled:opacity-30 disabled:grayscale transition-all flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-xs"
                         >
                             {isEvaluating ? 'AI Processing...' : 'Submit for Evaluation'}
-                            <Send size={16} />
+                            {/* Assuming Send icon is imported or available */}
+                            {/* <Send size={16} /> */}
                         </button>
                     )}
                 </div>
@@ -247,13 +248,14 @@ const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, corr
     );
 };
 
-const LessonView = ({ sessionId, topic, onBack, onReady }) => {
+const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added sio prop
     const [loading, setLoading] = useState(true);
     const [content, setContent] = useState(null);
     const [isThinking, setIsThinking] = useState(true);
     const [selectedOption, setSelectedOption] = useState(null);
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [isChallengeComplete, setIsChallengeComplete] = useState(false);
+    const [shadowReady, setShadowReady] = useState(null); // Project ID: 25-26J-130
     const [isCompleting, setIsCompleting] = useState(false);
     const [response, setResponse] = useState('');
     const [error, setError] = useState(null);
@@ -285,10 +287,11 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
             setSelectedOption(null);
             setIsSubmitted(false);
             setIsChallengeComplete(false);
+            setShadowReady(null); // Reset shadow on new lesson
             try {
                 const topicId = topic.id || topic.title;
                 // 0. Check for existing content
-                const existing = await getLessonContent("student_001", topicId);
+                const existing = await getLessonContent("alex_123", topicId);
 
                 if (signal.aborted) return;
 
@@ -365,15 +368,41 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         const controller = new AbortController();
         initializeLesson(controller.signal);
 
+        // Socket listeners for real-time updates
+        if (sio) {
+            sio.on('tot_final', (data) => {
+                console.log(">>> [ToT] Final Broadcast Recieved:", data);
+                // Assuming `lessonData` is equivalent to `content` in this component
+                setContent({
+                    type: "explanation", // Or infer type from data
+                    content: data.body_text || data.final_response || "Content updated."
+                });
+                setInteractionId(data.interaction_id);
+                setStrategyLabel(data.strategy);
+                setShadowReady(null); // Clear any pending shadows on new final content
+            });
+
+            sio.on('shadow_ready', (data) => {
+                console.log(">>> [Shadow ToT] Alternative Ready:", data);
+                setShadowReady(data);
+            });
+        }
+
+
         return () => {
             controller.abort();
+            if (sio) {
+                sio.off('tot_final');
+                sio.off('shadow_ready');
+            }
         };
-    }, [topic.id || topic.title]);
+    }, [topic.id || topic.title, sio]); // Added sio to dependencies
 
     const handleForceRegenerate = async () => {
         setIsThinking(true);
         setContent(null);
         setError(null);
+        setShadowReady(null); // Clear shadow on regeneration
         // Delete cache entry and re-run sim
         try {
             const topicId = topic.id || topic.title;
@@ -401,7 +430,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         text = text.replace(/\[MERMAID_START\][\s\S]*?\[MERMAID_END\]/mg, '');
 
         // Handle [IMAGE_FOR_ALEX] - Convert to a visual hint or Mermaid-friendly block
-        // In a real scenario, this would call an 'image_generation' API. 
+        // In a real scenario, this would call an 'image_generation' API.
         // For now, we'll transform it into a specialized visual indicator.
         text = text.replace(/\[IMAGE_FOR_ALEX\]/g, '\n\n> [!TIP]\n> **Visual Context Generated**: An specialized architectural snapshot has been generated for your learning profile Alex.\n\n');
 
@@ -438,6 +467,34 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         return true;
     }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady]);
 
+    const handleAcceptShadow = async () => {
+        if (!shadowReady) return;
+
+        console.log(">>> [Shadow ToT] Swapping active branch with shadow...");
+        // Update the main content with the shadow content
+        setContent({
+            type: "explanation", // Assuming shadow content is an explanation
+            content: shadowReady.shadow_content
+        });
+        setInteractionId(shadowReady.interaction_id);
+        setStrategyLabel(shadowReady.alternative_label);
+        setShadowReady(null); // Clear the shadow after acceptance
+
+        // Log intervention acceptance
+        try {
+            await handleUserFeedback({
+                student_id: "alex_123", // Assuming a fixed student ID for now
+                interaction_id: shadowReady.interaction_id,
+                action_type: 'intervention_accept',
+                sentiment: true, // Positive sentiment for accepting
+                modality_type: shadowReady.modality || 'TEXTUAL', // Use shadow's modality or default
+                topic_id: topic?.title // Use current topic title
+            });
+        } catch (err) {
+            console.error("Error logging shadow acceptance feedback:", err);
+        }
+    };
+
     const handleComplete = async () => {
         if (!sessionId || !topic || isCompleting) return;
         setIsCompleting(true);
@@ -447,7 +504,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
 
             // 2. Sync full lesson state to MongoDB
             const finalPayload = {
-                student_id: "student_001",
+                student_id: "alex_123",
                 topic_id: topic.title,
                 content: content,
                 user_response: response,
@@ -459,7 +516,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
             // 3. Save Performance if quiz was attempted
             if (content?.type === 'quiz' && isSubmitted) {
                 await savePerformance({
-                    student_id: "student_001",
+                    student_id: "alex_123",
                     session_id: sessionId,
                     topic_id: topic.title,
                     score: selectedOption === content.quiz?.correct_index ? 100 : 0,
@@ -483,7 +540,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
         try {
             const modality = (content?.type === 'visual_explanation' || sanitizedContent.includes('graph TD')) ? 'visual' : 'textual';
             await handleUserFeedback({
-                student_id: "student_001",
+                student_id: "alex_123",
                 interaction_id: interactionId,
                 action_type: strategyLabel || "SIMPLIFY_EXPLANATION",
                 sentiment: sentiment,
@@ -715,6 +772,44 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                         </motion.div>
                     )}
                 </main>
+
+                {/* Suggestion Toast Overlay (Project ID: 25-26J-130) */}
+                <AnimatePresence>
+                    {(shadowReady && !isThinking) && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+                            className="fixed bottom-8 right-8 z-50 w-80 p-5 rounded-2xl bg-zinc-900 border border-secondary/30 backdrop-blur-xl shadow-2xl"
+                        >
+                            <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-lg bg-secondary/20">
+                                    <Sparkles className="w-5 h-5 text-secondary" />
+                                </div>
+                                <div className="flex-1 text-left">
+                                    <h3 className="text-sm font-semibold text-white">Alternative Explanation Ready</h3>
+                                    <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
+                                        I noticed you might be stuck. Would you like to try a <b>{shadowReady.alternative_label}</b> approach instead?
+                                    </p>
+                                    <div className="flex gap-2 mt-4">
+                                        <button
+                                            onClick={handleAcceptShadow}
+                                            className="flex-1 py-2 rounded-lg bg-secondary hover:bg-secondary/80 text-white text-[10px] font-black uppercase tracking-wider transition-colors"
+                                        >
+                                            Yes, Switch
+                                        </button>
+                                        <button
+                                            onClick={() => setShadowReady(null)}
+                                            className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 text-[10px] uppercase font-bold transition-colors"
+                                        >
+                                            Ignore
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
         </div>
     );

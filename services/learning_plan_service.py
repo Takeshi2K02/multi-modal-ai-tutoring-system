@@ -19,7 +19,7 @@ class LearningPlanService:
         # 1. Sanitize & Structure
         # Ensure we have required metadata
         plan_doc = {
-            "student_id": "student_001", # Hardcoded for Single-Player MVP
+            "student_id": "alex_123", # Standardized for Project ID: 25-26J-130
             "original_goal": data.get("goal", ""),
             "normalized_goal": data.get("generatedTitle") or data.get("goal", "").title(), # Use generated title
             "status": "ACTIVE",

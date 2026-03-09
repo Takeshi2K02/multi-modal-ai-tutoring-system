@@ -15,8 +15,8 @@ import SkeletonCard from '../components/Skeletons/SkeletonCard';
  * 3. High-Contrast Progress: Uses vibrant gradients (Indigo -> Purple) against a deep black canvas.
  */
 const SessionDashboard = ({ onBack, onResume }) => {
-    const { data, error, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/student_001`, fetcher);
-    const { data: profile } = useSWR(`${API_BASE_URL}/api/user/profile/student_001`, fetcher);
+    const { data, error, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/alex_123`, fetcher);
+    const { data: profile } = useSWR(`${API_BASE_URL}/api/user/profile/alex_123`, fetcher);
 
     const sessions = data?.sessions || [];
     const historicalMastery = profile?.historical_mastery || {};

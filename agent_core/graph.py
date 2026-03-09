@@ -115,6 +115,9 @@ async def retrieve_context(state: AgentState) -> AgentState:
     preferences = profile.get("preferred_modality", {"visual": 0.33, "textual": 0.33, "interactive": 0.34}) if profile else {"visual": 0.33, "textual": 0.33, "interactive": 0.34}
     blacklist = profile.get("strategy_blacklist", {}).get(state["user_query"], []) if profile else []
 
+    # Metadata Benchmarking (Project ID: 25-26J-130)
+    estimated_reading_time = profile.get("average_reading_speed", 120) if profile else 120
+
     return {
         **state,
         "profile": profile,
@@ -124,6 +127,9 @@ async def retrieve_context(state: AgentState) -> AgentState:
         "frontier": [root_node],
         "tree_memory": {root_node.id: root_node},
         "best_node": root_node,
+        "shadow_frontier": [], # Initialize shadow_frontier here
+        "is_completed": False,
+        "estimated_reading_time": estimated_reading_time,
         "build_time": time.time(),
         "stop_early": False
     }
@@ -548,6 +554,75 @@ def check_stop_condition(state: AgentState) -> str:
         return "finalize"
     return "expand"
 
+async def background_synthesis(state: AgentState) -> AgentState:
+    """
+    Shadow ToT Node: Generates an alternative path in the background 
+    if an intervention is needed.
+    """
+    snapshot = state["context_data"].get("snapshot", {})
+    if not snapshot or not snapshot.get("intervention_needed"):
+        return state
+
+    print("[ToT] 🛰️ --- Node: Background Synthesis (Shadow ToT) ---")
+    
+    # 1. Identify Alternative Strategy
+    # Penalize current modality if this was triggered by a Thumbs Down? 
+    # Or just pick the next-best-scored path from a different branch.
+    tree_memory = state["tree_memory"]
+    best_node = state["best_node"]
+    
+    # Simple Logic: Find a node at the same depth as best_node but in a different branch
+    candidates = [n for n in tree_memory.values() if n.depth == best_node.depth and n.id != best_node.id]
+    
+    if not candidates:
+        print("[ToT] ⚠️ No alternative paths found for shadow synthesis.")
+        return state
+        
+    shadow_best = max(candidates, key=lambda x: x.path_score)
+    print(f"[ToT] 💎 Selected Shadow Path: {shadow_best.content[:50]}...")
+
+    # 2. Synthesize Shadow Content
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import StrOutputParser
+    from agent_core.llm import get_llm
+    
+    shadow_llm = get_llm()
+    prompt = ChatPromptTemplate.from_template("""
+        Role: Senior Pedagogical Architect.
+        Task: Synthesize a SHADOW (alternative) lesson content.
+        
+        Alternative Thought: {thought}
+        Goal: {query}
+        
+        Generate full multimodal text. Include [MERMAID_START] if visual.
+    """)
+    
+    print(f"[ToT] 🤖 --- Starting Shadow Synthesis for: {shadow_best.content[:30]}...")
+    shadow_chain = prompt | shadow_llm | StrOutputParser()
+    try:
+        shadow_lesson = await shadow_chain.ainvoke({
+            "thought": shadow_best.content,
+            "query": state["user_query"]
+        })
+        print("[ToT] 📝 Shadow Synthesis Result Received.")
+    except Exception as e:
+        print(f"[ToT] ❌ Shadow Synthesis Failed: {e}")
+        return state
+
+    # 3. Broadcast Shadow Ready via Socket.io
+    print("[ToT] 📡 Emitting shadow_ready event...")
+    from socket_manager import sio
+    await sio.emit("shadow_ready", {
+        "student_id": state["student_id"],
+        "interaction_id": state.get("interaction_id"),
+        "shadow_content": shadow_lesson,
+        "modality": "VISUAL" if "[MERMAID_START]" in shadow_lesson else "TEXTUAL",
+        "alternative_label": "Visual Analogy" if "[MERMAID_START]" in shadow_lesson else "Simplified Text"
+    })
+
+    print("[ToT] ✅ Shadow ToT Synthesis Complete & Broadcasted.")
+    return {**state, "shadow_frontier": [shadow_best]}
+
 async def finalize_output(state: AgentState) -> AgentState:
     """
     Node 5: Final output generation and latency calculation.
@@ -692,9 +767,37 @@ graph TD
     # Project ID: 25-26J-130: Generate Interaction ID early for scope stability
     from bson import ObjectId
     interaction_id = str(ObjectId())
+
+    # Recalculate latency after full_lesson is generated
+    latency = time.time() - state.get("build_time", time.time())
+    
+    # --- INTERVENTION HARDENING (Project ID: 25-26J-130) ---
+    from agent_core.snapshot import calculate_lesson_benchmark
+    word_count = len(full_lesson.split())
+    estimated_reading_time = calculate_lesson_benchmark(
+        full_lesson, 
+        state.get("profile", {}), 
+        topic=state["user_query"]
+    )
+    
+    print(f"[Intervention] --- Benchmark Set: {estimated_reading_time}s for {word_count} words ---")
+    
+    # Cleanup: Clear shadow_frontier once output is finalized to prevent leaks
+    shadow_frontier = []
     
     # Save Interaction with CV/Branch Metadata (Project ID: 25-26J-130)
     # ASYNC DECOUPLING: Move persistence to background task
+    # Project ID: 25-26J-130: Intervention Guard
+    # If this is a shadow run (intervention_needed), DO NOT emit tot_final or save interaction.
+    # The user must click "Yes, Switch" to apply this content.
+    if snapshot.get("intervention_needed"):
+        print("[ToT] 🛡️ Shadow Run Complete. Skipping final broadcast & persistence.")
+        return {
+            **state,
+            "final_response": full_lesson,
+            "body_text": full_lesson
+        }
+
     async def save_mem():
         memory = MemoryManager()
         memory.save_interaction({
@@ -709,6 +812,8 @@ graph TD
             "trace": trace,
             "high_confidence": is_high_confidence,
             "rag_sources": state["context_data"].get("rag_sources", []),
+            "estimated_reading_time": estimated_reading_time,
+            "is_completed": False,
             "timestamp": datetime.now()
         })
     asyncio.create_task(save_mem())
@@ -741,7 +846,9 @@ graph TD
         "selected_strategy_label": strategy_label,
         "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
         "interaction_id": interaction_id,
-        "build_time": latency
+        "build_time": latency,
+        "estimated_reading_time": estimated_reading_time,
+        "shadow_frontier": shadow_frontier
     }
 
 def create_tot_graph():
@@ -752,6 +859,8 @@ def create_tot_graph():
     workflow.add_node("evaluate_frontier", evaluate_frontier)
     workflow.add_node("prune_frontier", prune_frontier)
     workflow.add_node("finalize_output", finalize_output)
+    
+    workflow.add_node("background_synthesis", background_synthesis)
     
     workflow.set_entry_point("retrieve_context")
     
@@ -764,10 +873,11 @@ def create_tot_graph():
         check_stop_condition,
         {
             "expand": "expand_frontier",
-            "finalize": "finalize_output"
+            "finalize": "background_synthesis" # Check for shadow ToT before finishing
         }
     )
-    
+
+    workflow.add_edge("background_synthesis", "finalize_output")
     workflow.add_edge("finalize_output", END)
     
     return workflow.compile()

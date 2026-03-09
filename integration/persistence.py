@@ -41,7 +41,7 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
     db = _get_db()
     log_entry = {
         "user_id": user_id,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(),
         "engagement_score": engagement_score,
         "emotion": emotion,
         "gaze": gaze,
@@ -76,7 +76,7 @@ async def push_rl_strategy(user_id: str, action_id: int, confidence: float, reas
     db = _get_db()
     strategy_entry = {
         "user_id": user_id,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(),
         "action_id": action_id,
         "confidence": confidence,
         "reasoning": reasoning

@@ -64,13 +64,10 @@ class EndpointFilter(logging.Filter):
 # Filter uvicorn access logs
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
-# Socket.io Setup
-sio = AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+from socket_manager import sio
 app = ASGIApp(sio, fastapi_app)
 
-# Helper to get sio instance (for other modules)
-def get_sio():
-    return sio
+from socket_manager import get_sio
 
 # Enable CORS for local dev
 fastapi_app.add_middleware(
@@ -81,8 +78,115 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
 )
 
+from agent_core.snapshot import get_student_snapshot
+from db.connection import get_db_connection
 from agent_core.graph import create_tot_graph
 from agent_core.schemas import AgentState, ThoughtNode
+
+# Project ID: 25-26J-130: Proactive Intervention Monitor
+triggered_interventions = set()
+in_synthesis = set()
+active_student_synthesis = set() # Standardized Lock
+
+async def monitor_interventions():
+    """
+    Background Task: Periodically checks for stagnation and triggers Shadow ToT.
+    """
+    print(">>> [Intervention] Proactive Monitor Started.")
+    while True:
+        try:
+            db = get_db_connection()
+            # Dynamic Student Detection: Find latest student with engagement logs
+            latest_engagement = db.StudentEngagement.find_one(sort=[("timestamp", -1)])
+            # 1. Presence Guard: Only monitor if student is actively sending telemetry
+            latest_engagement = db.StudentEngagement.find_one(sort=[("timestamp", -1)])
+            if not latest_engagement:
+                await asyncio.sleep(10)
+                continue
+            
+            student_id = latest_engagement["user_id"]
+            last_ping = latest_engagement.get("timestamp")
+            
+            # If no telemetry for 30s, assume student is idle/away
+            if (datetime.now() - last_ping).total_seconds() > 30:
+                # print(f">>> [Intervention] Student {student_id} is idle. Skipping monitor.")
+                await asyncio.sleep(10)
+                continue
+
+            # 2. Synthesis Lock: Skip if student is currently generating a lesson
+            if student_id in active_student_synthesis:
+                # print(f">>> [Intervention] Student {student_id} is busy synthesizing. Skipping monitor.")
+                await asyncio.sleep(10)
+                continue
+
+            # 3. Fetch Snapshot (includes trigger logic)
+            snapshot = get_student_snapshot(student_id)
+            
+            if snapshot.intervention_needed:
+                # 3. Check if we already handled this interaction
+                latest_inter = db.interactions.find_one(
+                    {"student_id": student_id},
+                    sort=[("timestamp", -1)]
+                )
+                
+                if latest_inter:
+                    inter_id = str(latest_inter["_id"])
+                    if inter_id not in triggered_interventions and inter_id not in in_synthesis:
+                        query = latest_inter.get("query")
+                        if not query:
+                            print(f">>> [Intervention] ⚠️ Skipping {inter_id}: Missing user query.")
+                            continue
+
+                        print(f">>> [Intervention] 🛰️ Stagnation Detected for {inter_id}. Triggering Shadow ToT...")
+                        
+                        # Mark as in synthesis to prevent double-runs
+                        in_synthesis.add(inter_id)
+                        
+                        # 3. Trigger ToT in Shadow Mode
+                        async def run_shadow():
+                            try:
+                                agent = create_tot_graph()
+                                initial_state = {
+                                    "student_id": student_id,
+                                    "user_query": latest_inter["query"],
+                                    "context_data": {"snapshot": snapshot.dict()},
+                                    "profile": None,
+                                    "frontier": [],
+                                    "tree_memory": {},
+                                    "best_node": None,
+                                    "student_preferences": {},
+                                    "strategy_blacklist": [],
+                                    "teaching_strategy": None,
+                                    "final_response": None,
+                                    "reasoning_trace": [],
+                                    "build_time": 0.0,
+                                    "stop_early": False,
+                                    "selected_strategy_label": None,
+                                    "interaction_outcome": None,
+                                    "interaction_id": inter_id
+                                }
+                                # The graph will run background_synthesis because intervention_needed is True
+                                await agent.ainvoke(initial_state)
+                                # Success!
+                                triggered_interventions.add(inter_id)
+                            except Exception as e:
+                                print(f">>> [Intervention] Shadow Run Failed: {e}")
+                            finally:
+                                # Remove from in_synthesis regardless of outcome
+                                if inter_id in in_synthesis:
+                                    in_synthesis.remove(inter_id)
+                            
+                        asyncio.create_task(run_shadow())
+
+        except Exception as e:
+            print(f">>> [Intervention] Monitor Error: {e}")
+            
+        await asyncio.sleep(10) # Check every 10 seconds
+
+@fastapi_app.on_event("startup")
+async def startup_event():
+    print(">>> Initializing Agentic AI Core...")
+    asyncio.create_task(monitor_interventions())
 
 @fastapi_app.on_event("shutdown")
 async def shutdown_event():
@@ -270,7 +374,7 @@ async def evaluate_challenge(req: ChallengeRequest):
             "score": res_data.get("score", 0.0) * 100,
             "feedback": res_data.get("feedback", ""),
             "type": "CHALLENGE",
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.now()
         }
         service.save_performance_record(record)
         service.update_session_progress(req.session_id, req.topic_id)
@@ -442,7 +546,7 @@ async def run_simulation(req: ScenarioRequest):
         context_data["topic_content"] = req.topic_content
         
     initial_state: AgentState = {
-        "student_id": "student_001",
+        "student_id": "alex_123",
         "user_query": query,
         "context_data": context_data,
         "profile": None,
@@ -465,6 +569,8 @@ async def run_simulation(req: ScenarioRequest):
     agent = create_tot_graph()
     try:
         # Project ID: 25-26J-130: 90s Timeout Guard for Multimodal Synthesis
+        # Track active synthesis to block interventions
+        active_student_synthesis.add(student_id)
         final_state = await asyncio.wait_for(
             agent.ainvoke(initial_state, config={"recursion_limit": 20}),
             timeout=90.0
@@ -507,6 +613,8 @@ async def run_simulation(req: ScenarioRequest):
                 "error": errorMessage
             }
         }
+    finally:
+        active_student_synthesis.discard(student_id)
 
 @fastapi_app.post("/api/goal_decompose")
 async def goal_decompose(req: DecomposeRequest):
@@ -583,7 +691,7 @@ async def get_historical_analytics(user_id: str = "alex_123"):
         db = _get_db()
         
         # 1. CV Aggregation (Last 24 hours)
-        one_day_ago = datetime.utcnow() - timedelta(days=1)
+        one_day_ago = datetime.now() - timedelta(days=1)
         cv_logs = list(db.StudentEngagement.find({
             "user_id": user_id,
             "timestamp": {"$gte": one_day_ago}
@@ -830,7 +938,7 @@ async def handle_user_feedback(req: UserFeedbackRequest):
                 "$set": update_data,
                 "$push": {
                     "learning_history": {
-                        "timestamp": datetime.utcnow(),
+                        "timestamp": datetime.now(),
                         "action_taken": req.action_type,
                         "user_feedback": 1 if req.sentiment else -1
                     }
