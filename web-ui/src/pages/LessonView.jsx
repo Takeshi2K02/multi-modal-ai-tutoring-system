@@ -12,8 +12,9 @@ import {
     FileText,
     Database,
     ChevronRight,
-    Send,
-    AlertCircle
+    AlertCircle,
+    ThumbsUp,
+    ThumbsDown
 } from 'lucide-react';
 import DynamicVisualContainer from '../components/DynamicVisualContainer';
 import Mermaid from '../components/Mermaid';
@@ -643,7 +644,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                                                 feedbackSent === 'up' ? "bg-secondary/20 border-secondary text-secondary" : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50"
                                             )}
                                         >
-                                            <Sparkles size={20} />
+                                            <ThumbsUp size={20} />
                                         </button>
                                         <button
                                             onClick={() => handleFeedback(false)}
@@ -653,7 +654,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady }) => {
                                                 feedbackSent === 'down' ? "bg-danger/20 border-danger text-danger" : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50"
                                             )}
                                         >
-                                            <XCircle size={20} />
+                                            <ThumbsDown size={20} />
                                         </button>
                                     </div>
                                     {feedbackSent && (
