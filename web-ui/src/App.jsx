@@ -19,6 +19,7 @@ import Navbar from './components/Navbar';
 // import ContentGeneration from './pages/ContentGeneration'; // Replaced by LessonView
 import AdminMonitor from './components/AdminMonitor';
 import DataDashboard from './pages/DataDashboard';
+import AgentDebugger from './pages/AgentDebugger';
 import LearningLayout from './components/LearningLayout';
 import LiveAffectSensing from './components/LiveAffectSensing';
 import { ThemeProvider } from './context/ThemeContext';
@@ -32,6 +33,7 @@ function App() {
   const [isLessonReady, setIsLessonReady] = useState(false);
   const [contentGenRequest, setContentGenRequest] = useState(null); // New State
   const [countdown, setCountdown] = useState(0); // New State
+  const [preGeneratedContent, setPreGeneratedContent] = useState(null); // PHASE 4: Direct Handoff
 
   // Dynamic Title
   useEffect(() => {
@@ -43,7 +45,8 @@ function App() {
       agent: 'EduSynth - Agent View',
       upload: 'EduSynth - Upload',
       monitor: 'EduSynth - Admin Monitor',
-      data: 'EduSynth - Data Center'
+      data: 'EduSynth - Data Center',
+      agent: 'EduSynth - Agent Debugger'
     };
     document.title = titles[view] || 'EduSynth AI Tutor';
   }, [view]);
@@ -137,10 +140,17 @@ function App() {
     setOutcome(null);
     setCountdown(0);
 
+    // Generate Synthesis ID for the session (Project ID: 25-26J-130)
+    const synthesisId = `syn-${Date.now()}`;
+    setOutcome({ meta: { interaction_id: synthesisId } }); // Optimistic state for listeners
+
     try {
+      // PROJECT ID: 25-26J-130: Immediate Redirect to Agent Debugger
+      setView('agent');
+
       const { runSimulation } = await import('./services/api');
-      // Pass the current topic context if available
-      const result = await runSimulation(scenario, currentTopicContext);
+      // Pass the current topic context and synthesis_id
+      const result = await runSimulation(scenario, currentTopicContext, synthesisId);
       setGraphData(result);
       setOutcome(result);
       // NOTE: Simulation complete, but we wait for VISUAL playback to finish before countdown.
@@ -238,7 +248,8 @@ function App() {
             onContinue={(topic) => {
               setCurrentTopicContext(topic);
               setIsLessonReady(false); // Reset for next lesson
-              setView('lesson');
+              setPreGeneratedContent(null); // Clear old content
+              setView('agent'); // PROJECT ID: 25-26J-130: Immediate Redirect to Debugger
             }}
           />
         );
@@ -250,8 +261,10 @@ function App() {
             key={currentTopicContext?.id || currentTopicContext?.title || 'active-module'}
             sessionId={activeSessionId}
             topic={currentTopicContext}
+            preGeneratedContent={preGeneratedContent} // PHASE 4
             onBack={() => {
               setIsLessonReady(false);
+              setPreGeneratedContent(null);
               setView('curriculum');
             }}
             onReady={() => setIsLessonReady(true)}
@@ -286,176 +299,21 @@ function App() {
 
       case 'agent':
         return (
-          <div className="flex h-full w-full relative overflow-hidden bg-zinc-950 dark:bg-edu-bg-dark selection:bg-primary/30 transition-colors">
-
-            {/* LEFT EDGE TOGGLE (Student Profile) */}
-            <button
-              onClick={() => setShowProfile(!showProfile)}
-              className={`absolute top-1/2 -translate-y-1/2 z-50 py-10 px-2 rounded-r-2xl border-y border-r border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-all duration-500 flex flex-col items-center gap-4 ${showProfile ? 'left-80' : 'left-0'
-                } ${showProfile ? 'bg-white/60 dark:bg-[#1E293B]/20 text-edu-text-light dark:text-edu-text-dark backdrop-blur-3xl' : 'bg-edu-surface-light dark:bg-[#1E293B]/60 text-primary backdrop-blur hover:bg-edu-bg-light dark:hover:bg-[#1E293B]/80'
-                }`}
-            >
-              <div className="flex flex-col items-center gap-4">
-                {showProfile ? <ChevronLeft size={16} /> : <User size={18} />}
-                <span className="text-[10px] font-black uppercase tracking-[0.3em] [writing-mode:vertical-lr] rotate-180">
-                  {showProfile ? 'Close' : 'Student'}
-                </span>
-              </div>
-            </button>
-
-
-            {/* LEFT PANEL (Overlay) */}
-            <div className={`absolute top-0 left-0 h-full transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${showProfile ? 'w-80 translate-x-0' : 'w-80 -translate-x-full'} z-40 bg-white/95 dark:bg-[#1E293B]/15 backdrop-blur-3xl border-r border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-colors`}>
-              <StudentProfilePanel
-                profile={outcome?.meta?.profile || {
-                  name: "Alex (Real)",
-                  mastery_level: "Sophomore",
-                  learning_preferences: analytics?.preferences || {}
-                }}
-                tieTrace={outcome?.meta?.tie_break_trace}
-                isDemoMode={isDemoMode}
-                demoPersona={demoPersona}
-              />
-            </div>
-
-            {/* CENTER GRAPH (Centered) */}
-            <div className="flex-1 relative h-full dots-pattern bg-edu-bg-light dark:bg-edu-bg-dark z-10 transition-colors duration-300">
-              <TreeVisualizer
-                data={graphData}
-                onAnimationComplete={() => {
-                  if (graphData && !contentGenRequest) {
-                    handleSimulationComplete();
-                  }
-                }}
-              />
-              {!graphData && !loading && !error && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="text-center space-y-4 opacity-30">
-                    <div className="text-6xl grayscale filter contrast-125">🌲</div>
-                    <div className="text-xl font-light text-zinc-500 dark:text-slate-500">
-                      Agent Visualizer
-                      <br />
-                      <span className="text-base">Waiting for simulation...</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Status Overlay & Countdown */}
-              {countdown > 0 && (
-                <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-primary dark:bg-primary/90 text-white backdrop-blur-md px-6 py-3 rounded-full shadow-2xl border border-primary/20 dark:border-primary/50 flex items-center gap-4 z-50 animate-in fade-in slide-in-from-top-4 transition-all">
-                  <div className="relative w-5 h-5">
-                    <svg className="w-full h-full -rotate-90">
-                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary-dark opacity-30" />
-                      <circle cx="10" cy="10" r="8" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="50" strokeDashoffset={50 - (50 * countdown) / 10} className="text-secondary transition-all duration-1000 ease-linear" />
-                    </svg>
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-xs font-bold uppercase tracking-wider text-white/70">Simulation Complete</span>
-                    <span className="text-sm font-medium">Preparing learning content... {countdown}s</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* RIGHT PANEL (Overlay) */}
-            <div className={`absolute top-0 right-0 h-full transition-all duration-500 ease-[cubic-bezier(0.25,0.1,0.25,1)] ${showCV || showRL ? 'w-80 translate-x-0' : 'w-80 translate-x-full'} z-40 bg-white/95 dark:bg-[#1E293B]/15 backdrop-blur-3xl border-l border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-colors`}>
-              <div className="h-full flex flex-col p-4 gap-4">
-                {/* CV Panel Fragment */}
-                <div className={`flex-1 transition-all duration-500 ${showCV ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
-                  <div className="h-full flex flex-col rounded-[32px] border border-secondary/20 bg-zinc-50 dark:bg-white/[0.02] overflow-hidden shadow-sm dark:shadow-none transition-colors">
-                    <div className="p-4 border-b border-edu-border-light dark:border-white/5 flex justify-between items-center bg-secondary/5 transition-colors">
-                      <span className="text-[10px] font-black tracking-widest text-secondary uppercase transition-colors">CV ANALYTICS</span>
-                      <button onClick={() => setShowCV(false)}><ChevronRight size={14} className="text-zinc-400 dark:text-slate-500 transition-colors" /></button>
-                    </div>
-                    <div className="p-4 overflow-y-auto custom-scrollbar">
-                      <div className="space-y-6">
-                        <div className="p-4 bg-white dark:bg-white/[0.01] rounded-2xl border border-edu-border-light dark:border-white/5 group hover:border-secondary/30 transition-all duration-300">
-                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block mb-1 font-black tracking-widest uppercase transition-colors">Latest Engagement</span>
-                          <span className="text-3xl font-mono text-secondary transition-colors">{latestCv.engagement_score || '0.00'}</span>
-                        </div>
-                        <div className="space-y-3">
-                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block font-black tracking-widest uppercase transition-colors">Current Affect</span>
-                          <div className="p-4 bg-secondary/5 rounded-[24px] border border-secondary/20 flex justify-between items-center group transition-all duration-500">
-                            <span className="text-lg font-light text-edu-text-light dark:text-secondary-100 capitalize tracking-tight transition-colors">{latestCv.emotion || 'Neutral'}</span>
-                            <div className="w-2.5 h-2.5 rounded-full bg-secondary animate-pulse shadow-[0_0_12px_rgba(16,185,129,0.5)] transition-colors" />
-                          </div>
-                          <div className="text-[9px] font-mono text-zinc-400 dark:text-slate-600 text-right opacity-50 transition-colors">
-                            SIGNAL SYNCED: {latestCv.timestamp ? new Date(latestCv.timestamp).toLocaleTimeString() : 'Awaiting...'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* RL Panel Fragment */}
-                <div className={`flex-1 transition-all duration-500 ${showRL ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}>
-                  <div className="h-full flex flex-col rounded-[32px] border border-primary/20 bg-zinc-50 dark:bg-white/[0.02] overflow-hidden shadow-sm dark:shadow-none transition-colors">
-                    <div className="p-4 border-b border-edu-border-light dark:border-white/5 flex justify-between items-center bg-primary/5 transition-colors">
-                      <span className="text-[10px] font-black tracking-widest text-primary uppercase transition-colors">RL STRATEGY</span>
-                      <button onClick={() => setShowRL(false)}><ChevronRight size={14} className="text-zinc-400 dark:text-slate-500 transition-colors" /></button>
-                    </div>
-                    <div className="p-4 overflow-y-auto custom-scrollbar">
-                      <div className="space-y-6">
-                        <div className="p-4 bg-white dark:bg-white/[0.01] rounded-2xl border border-edu-border-light dark:border-white/5 group hover:border-primary/30 transition-all duration-300">
-                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block mb-1 font-black tracking-widest uppercase transition-colors">Strategy Confidence</span>
-                          <span className="text-3xl font-mono text-primary transition-colors">{latestRl.confidence ? (latestRl.confidence * 100).toFixed(0) + '%' : '0%'}</span>
-                        </div>
-                        <div className="space-y-3">
-                          <span className="text-[9px] text-zinc-400 dark:text-slate-500 block font-black tracking-widest uppercase transition-colors">Deciding Policy</span>
-                          <div className="p-4 bg-primary/5 rounded-[24px] border border-primary/20 group transition-all duration-500">
-                            <span className="text-sm font-medium text-edu-text-light dark:text-primary-100 capitalize mb-1 block transition-colors">{latestRl.action || 'Idle'}</span>
-                            <span className="text-[10px] text-zinc-500 dark:text-slate-500 line-clamp-2 italic font-light leading-relaxed transition-colors">
-                              {latestRl.reasoning || "Observing student patterns for optimal intervention path."}
-                            </span>
-                          </div>
-                          <div className="text-[9px] font-mono text-zinc-400 dark:text-slate-600 text-right opacity-50 transition-colors">
-                            POLICY UPDATED: {latestRl.timestamp ? new Date(latestRl.timestamp).toLocaleTimeString() : 'Awaiting...'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* RIGHT EDGE BUTTONS */}
-
-            {/* CV Toggle (Top Quarter) */}
-            <button
-              onClick={() => setShowCV(!showCV)}
-              className={`absolute top-[30%] -translate-y-1/2 z-50 py-8 px-2 rounded-l-2xl border-y border-l border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-all duration-300 flex flex-col items-center gap-4 ${showCV || showRL ? 'right-80' : 'right-0'
-                } ${showCV ? 'bg-white/60 dark:bg-[#1E293B]/15 text-secondary backdrop-blur-3xl' : 'bg-edu-surface-light dark:bg-[#1E293B]/40 text-secondary/70 hover:text-secondary hover:bg-edu-bg-light dark:hover:bg-[#1E293B]/60 backdrop-blur'
-                }`}
-            >
-              <div className="flex flex-col items-center gap-4">
-                {showCV ? <ChevronRight size={16} /> : <Camera size={18} />}
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] [writing-mode:vertical-lr] rotate-180">
-                  {showCV ? 'Close' : 'CV Input'}
-                </span>
-              </div>
-            </button>
-
-            {/* RL Toggle (Bottom Quarter) */}
-            <button
-              onClick={() => setShowRL(!showRL)}
-              className={`absolute top-[70%] -translate-y-1/2 z-50 py-8 px-2 rounded-l-2xl border-y border-l border-edu-border-light dark:border-[#90E0EF]/10 shadow-2xl transition-all duration-300 flex flex-col items-center gap-4 ${showCV || showRL ? 'right-80' : 'right-0'
-                } ${showRL ? 'bg-white/60 dark:bg-[#1E293B]/15 text-primary backdrop-blur-3xl' : 'bg-edu-surface-light dark:bg-[#1E293B]/40 text-primary/70 hover:text-primary hover:bg-edu-bg-light dark:hover:bg-[#1E293B]/60 backdrop-blur'
-                }`}
-            >
-              <div className="flex flex-col items-center gap-4">
-                {showRL ? <ChevronRight size={16} /> : <Bot size={18} />}
-                <span className="text-[10px] font-black uppercase tracking-[0.2em] [writing-mode:vertical-lr] rotate-180">
-                  {showRL ? 'Close' : 'RL Input'}
-                </span>
-              </div>
-            </button>
-
-          </div>
+          <AgentDebugger
+            context={{
+              profile: demoPersona || { name: "Alex", preferred_modality: { visual: 0.33, textual: 0.33, interactive: 0.34 } },
+              snapshot: latest?.cv || {},
+              synthesis_id: outcome?.meta?.interaction_id
+            }}
+            onComplete={(payload) => {
+              // PROJECT ID: 25-26J-130: Phase 4 Direct Handoff
+              if (payload) {
+                setPreGeneratedContent(payload);
+              }
+              setView('lesson');
+            }}
+          />
         );
-
       default:
         return <div>Unknown View</div>;
     }

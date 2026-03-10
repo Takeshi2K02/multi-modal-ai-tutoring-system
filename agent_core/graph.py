@@ -9,6 +9,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 import json
 import re
+from bson import ObjectId
 
 from memory.student_memory import MemoryManager
 from mocks.data_generators import get_mock_cv_inputs, get_mock_rl_strategy
@@ -23,9 +24,9 @@ import time
 
 # Configuration
 CONFIG = ToTConfig(
-    max_depth=2,
-    beam_width=2, # Optimized Beam Width
-    branching_factor=2, # Reduced branching factor for speed
+    max_depth=3, # Multi-level split for Research (Project ID: 25-26J-130)
+    beam_width=3, # Increased beam width for Shadow Branching
+    branching_factor=3, # PROJECT ID: 25-26J-130: Boost branching for richer research trees
     score_threshold=0.85
 )
 
@@ -99,16 +100,36 @@ async def retrieve_context(state: AgentState) -> AgentState:
         content=f"Root: Goal='{state['user_query']}'",
         score=1.0,
         path_score=1.0,
-        metadata={"type": "root"}
     )
     
+    # Generate Interaction ID early for real-time streaming (Project ID: 25-26J-130)
+    interaction_id = state.get("interaction_id") or str(ObjectId())
+    
     # Broadcast to Admin Dashboard
-    from server import sio
+    from socket_manager import sio
     await sio.emit("tot_step", {
         "step": "retrieve_context",
         "snapshot": snapshot.dict(),
         "student_id": student_id,
         "query": state["user_query"]
+    })
+    
+    # --- REAL-TIME ToT EMISSION (Project ID: 25-26J-130) ---
+    await sio.emit("node_discovered", {
+        "synthesis_id": interaction_id,
+        "id": root_node.id,
+        "parent_id": None,
+        "depth": 0,
+        "content": root_node.content,
+        "metadata": {
+            **root_node.metadata,
+            "strategy_name": "Root Inquiry",
+            "internal_thought": "Initializing synthesis based on student profile and live CV state.",
+            "pruning_status": "Selected",
+            "localScore": root_node.score,
+            "pathScore": root_node.path_score
+        },
+        "timestamp": datetime.now().isoformat()
     })
     
     # Load Preferences & Blacklist (Project ID: 25-26J-130)
@@ -120,6 +141,8 @@ async def retrieve_context(state: AgentState) -> AgentState:
 
     return {
         **state,
+        "student_id": student_id,
+        "interaction_id": interaction_id,
         "profile": profile,
         "context_data": context_data,
         "student_preferences": preferences,
@@ -148,6 +171,10 @@ async def expand_frontier(state: AgentState) -> AgentState:
     
     print(f"[ToT] 🌿 --- Node: Expand Frontier (Depth {current_depth} -> {next_depth}) ---")
     
+    # Enhanced Logging for observability (Project ID: 25-26J-130)
+    for node in frontier:
+        print(f"[ToT] >>> Expanding parent node: '{node.content[:50]}...' (Depth {node.depth})")
+    
     tree_memory = state["tree_memory"].copy()
     
     # Generate children for all nodes in frontier concurrently
@@ -155,6 +182,7 @@ async def expand_frontier(state: AgentState) -> AgentState:
     all_children_contents = await asyncio.gather(*tasks)
     
     new_frontier = []
+    from socket_manager import sio # Unified socket import
     for node, children_contents in zip(frontier, all_children_contents):
         for content in children_contents:
             child = ThoughtNode(
@@ -166,13 +194,24 @@ async def expand_frontier(state: AgentState) -> AgentState:
             new_frontier.append(child)
             tree_memory[child.id] = child
             
-    # Broadcast to Admin Dashboard
-    from server import sio
-    await sio.emit("tot_step", {
-        "step": "expand_frontier",
-        "depth": next_depth,
-        "new_nodes_count": len(new_frontier)
-    })
+            # --- REAL-TIME ToT EMISSION (Project ID: 25-26J-130) ---
+            # Emitting immediately inside the loop for discovery effect
+            await sio.emit("node_discovered", {
+                "synthesis_id": state.get("interaction_id"),
+                "id": child.id,
+                "parent_id": child.parent_id,
+                "depth": child.depth,
+                "content": child.content,
+                "metadata": {
+                    **child.metadata,
+                    "strategy_name": child.metadata.get("strategy_name", "Exploring Path"),
+                    "internal_thought": child.metadata.get("internal_thought", child.content),
+                    "pruning_status": "Active",
+                    "localScore": child.score,
+                    "pathScore": child.path_score
+                },
+                "timestamp": datetime.now().isoformat()
+            })
             
     return {**state, "frontier": new_frontier, "tree_memory": tree_memory}
 
@@ -214,12 +253,26 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 raw_res = ""
                 try:
                     chain = prompt | llm | StrOutputParser()
-                    raw_res = await chain.ainvoke({
-                        "action_id": action_id,
-                        "rl_strategy": rl_strategy,
-                        "pruning_logic": pruning_logic,
-                        "query": query, "k": CONFIG.branching_factor
+                    # PROJECT ID: 25-26J-130: Local Timeout Guard for LLM stalls
+                    raw_res = await asyncio.wait_for(
+                        chain.ainvoke({
+                            "action_id": action_id,
+                            "rl_strategy": rl_strategy,
+                            "pruning_logic": pruning_logic,
+                            "query": query, "k": CONFIG.branching_factor
+                        }),
+                        timeout=45.0
+                    )
+                    
+                    # --- REASONING TERMINAL STREAM (Project ID: 25-26J-130) ---
+                    from socket_manager import sio
+                    await sio.emit("thought_stream", {
+                        "synthesis_id": state.get("interaction_id"),
+                        "source": "Expand Frontier (D1)",
+                        "content": raw_res,
+                        "timestamp": datetime.now().isoformat()
                     })
+                    
                     res = extract_json_from_text(raw_res)
                     options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                     
@@ -228,6 +281,8 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                         results.append({
                             "content": opt["label"], 
                             "metadata": {
+                                "strategy_name": opt.get("label", ""),
+                                "internal_thought": opt.get("approach", ""),
                                 "approach": opt.get("approach", ""), 
                                 "strategy_type": opt.get("strategy_type", "visual_explanation"),
                                 "type": "strategy",
@@ -310,12 +365,26 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
             for attempt in range(max_retries):
                 try:
                     chain = prompt | llm | StrOutputParser()
-                    raw_res = await chain.ainvoke({
-                        "rag_evidence": context.get("rag_evidence", ""),
-                        "strategy": parent_node.content, 
-                        "approach": parent_node.metadata.get("approach", ""),
-                        "query": query, "k": CONFIG.branching_factor
+                    # PROJECT ID: 25-26J-130: Local Timeout Guard for LLM stalls
+                    raw_res = await asyncio.wait_for(
+                        chain.ainvoke({
+                            "rag_evidence": context.get("rag_evidence", ""),
+                            "strategy": parent_node.content, 
+                            "approach": parent_node.metadata.get("approach", ""),
+                            "query": query, "k": CONFIG.branching_factor
+                        }),
+                        timeout=45.0
+                    )
+                    
+                    # --- REASONING TERMINAL STREAM (Project ID: 25-26J-130) ---
+                    from socket_manager import sio
+                    await sio.emit("thought_stream", {
+                        "synthesis_id": state.get("interaction_id"),
+                        "source": f"Expand Frontier (D2: {parent_node.content})",
+                        "content": raw_res,
+                        "timestamp": datetime.now().isoformat()
                     })
+                    
                     res = extract_json_from_text(raw_res)
                     options = res.get("options", []) if isinstance(res, dict) else (res if isinstance(res, list) else [])
                     
@@ -347,16 +416,91 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                         directive["content"] = str(content_val)
                             
                         children.append({
-                            "content": str(content_val),
+                            "content": content_val[:100] + "..." if content_val and len(content_val) > 100 else content_val,
                             "metadata": {
-                                "focus": opt.get("focus", ""),
-                                "type": "response",
-                                "directive": directive
+                                "strategy_name": parent_node.metadata.get("strategy_name", "Synthesis"),
+                                "internal_thought": content_val,
+                                "directive": directive,
+                                "type": "variation"
                             }
                         })
                     return children
                 except Exception as e:
                     print(f"Gen D2 Failed: {e}")
+                    await asyncio.sleep(base_delay * (attempt + 1))
+            return []
+
+        elif target_depth == 3:
+            # Depth 3: Evaluation & Finalized Path Selection (Project ID: 25-26J-130)
+            prompt = PromptTemplate(
+                template="""
+                Role: Senior BI Pedagogical Auditor.
+                
+                Goal: {query}
+                Path Reasoning: {internal_thought}
+                
+                TASK: Synthesize the Finalized Path for the lesson. 
+                STRICT REQUIREMENT: 
+                - Ensure the content is cohesive and ready for multimodal delivery.
+                - If the previous path was 'Visual', confirm the visual aids are sufficient.
+                - If 'Textual', ensure the first principles logic is sound.
+                
+                JSON FORMAT:
+                {{
+                    "options": [
+                        {{
+                            "directive": {{
+                                "type": "final_synthesis",
+                                "content": "The finalized lesson content...",
+                                "status": "Ready for Lesson View"
+                            }}
+                        }}
+                    ]
+                }}
+                """,
+                input_variables=["query", "internal_thought"]
+            )
+            for attempt in range(max_retries):
+                try:
+                    chain = prompt | llm | StrOutputParser()
+                    # PROJECT ID: 25-26J-130: Local Timeout Guard for LLM stalls
+                    raw_res = await asyncio.wait_for(
+                        chain.ainvoke({
+                            "query": query,
+                            "internal_thought": parent_node.metadata.get("internal_thought", parent_node.content)
+                        }),
+                        timeout=45.0
+                    )
+                    
+                    # --- REASONING TERMINAL STREAM ---
+                    from socket_manager import sio
+                    await sio.emit("thought_stream", {
+                        "synthesis_id": state.get("interaction_id"),
+                        "source": "Finalizing Path (D3)",
+                        "content": raw_res,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    res = extract_json_from_text(raw_res)
+                    options = res.get("options", []) if isinstance(res, dict) else []
+                    
+                    children = []
+                    for opt in options:
+                        directive = opt.get("directive", {})
+                        content_val = directive.get("content", "Final Path Selected")
+                        children.append({
+                            "content": "Finalized Path",
+                            "metadata": {
+                                "strategy_name": "Finalized Path",
+                                "internal_thought": content_val,
+                                "directive": directive,
+                                "type": "final",
+                                "pruning_status": "Selected"
+                            }
+                        })
+                    return children
+                except Exception as e:
+                    print(f"Gen D3 Failed: {e}")
                     await asyncio.sleep(base_delay * (attempt + 1))
             return []
 
@@ -392,6 +536,24 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
         node.path_score = path_score
         scored_frontier.append(node)
         
+        # --- REAL-TIME SCORING BROADCAST (Project ID: 25-26J-130) ---
+        # Re-emitting node_discovered with updated scores for 'Evaluation Phase' visibility
+        from socket_manager import sio
+        await sio.emit("node_discovered", {
+            "synthesis_id": state.get("interaction_id"),
+            "id": node.id,
+            "parent_id": node.parent_id,
+            "depth": node.depth,
+            "content": node.content,
+            "metadata": {
+                **node.metadata,
+                "localScore": node.score,
+                "pathScore": node.path_score,
+                "pruning_status": "Evaluated"
+            },
+            "timestamp": datetime.now().isoformat()
+        })
+        
     # Early Stopping Logic (Project ID: 25-26J-130)
     stop_early = False
     snapshot = state["context_data"].get("snapshot", {})
@@ -399,13 +561,12 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
     target_action = snapshot.get("action_id", 0)
     
     for node in scored_frontier:
-        # Check if node score > threshold AND metadata matches the target RL action
-        if node.score >= CONFIG.score_threshold:
-            # For depth 1, check if strategy type matches pruning intent (simplified check)
-            # For depth 2, check if it was derived from a valid depth 1 strategy
+        # PROJECT ID: 25-26J-130: HARDENED DEPTH ENFORCEMENT
+        # Only allow early stopping at Depth 3+ to ensure research visibility for Phase 7
+        if node.depth >= 3 and node.score >= CONFIG.score_threshold:
             stop_early = True
             current_best = node
-            print(f"[ToT] 🎯 >>> Early Stopping Triggered: Score {node.score:.2f} >= {CONFIG.score_threshold}")
+            print(f"[ToT] 🎯 >>> Early Stopping Triggered (Depth {node.depth}): Score {node.score:.2f} >= {CONFIG.score_threshold}")
             break
 
     # Personalization Tie-Breaker (Project ID: 25-26J-130)
@@ -449,7 +610,7 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
                     top_two[0].path_score += 0.01
             
     # Broadcast to Admin Dashboard
-    from server import sio
+    from socket_manager import sio
     await sio.emit("tot_step", {
         "step": "evaluate_frontier",
         "scores": [n.score for n in scored_frontier],
@@ -488,15 +649,19 @@ async def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory:
     async with semaphore:
         chain = prompt | llm | StrOutputParser()
         try:
-            raw_res = await chain.ainvoke({
-                "query": state["user_query"],
-                "snapshot": json.dumps(snapshot),
-                "profile": str(state["profile"]),
-                "rl_strategy": snapshot.get("rl_strategy"),
-                "trend": snapshot.get("engagement_trend"),
-                "content": node.content,
-                "metadata": str(node.metadata)
-            })
+            # PROJECT ID: 25-26J-130: Local Timeout Guard
+            raw_res = await asyncio.wait_for(
+                chain.ainvoke({
+                    "query": state["user_query"],
+                    "snapshot": json.dumps(snapshot),
+                    "profile": str(state["profile"]),
+                    "rl_strategy": snapshot.get("rl_strategy"),
+                    "trend": snapshot.get("engagement_trend"),
+                    "content": node.content,
+                    "metadata": str(node.metadata)
+                }),
+                timeout=45.0
+            )
             res = extract_json_from_text(raw_res)
             return float(res.get("score", 0.5))
         except asyncio.CancelledError:
@@ -530,7 +695,7 @@ async def prune_frontier(state: AgentState) -> AgentState:
     beam = sorted_frontier[:CONFIG.beam_width]
     
     # Broadcast to Admin Dashboard
-    from server import sio
+    from socket_manager import sio
     await sio.emit("tot_step", {
         "step": "prune_frontier",
         "beam_size": len(beam)
@@ -764,9 +929,8 @@ graph TD
     # Project ID: 25-26J-130: RL Reinforcement - Flag high-confidence examples
     is_high_confidence = simulated_final_score >= 0.85
     
-    # Project ID: 25-26J-130: Generate Interaction ID early for scope stability
-    from bson import ObjectId
-    interaction_id = str(ObjectId())
+    # Interaction ID is already generated in retrieve_context (Project ID: 25-26J-130)
+    interaction_id = state.get("interaction_id")
 
     # Recalculate latency after full_lesson is generated
     latency = time.time() - state.get("build_time", time.time())
@@ -819,7 +983,7 @@ graph TD
     asyncio.create_task(save_mem())
 
     # Final broadcast to Admin Dashboard
-    from server import sio
+    from socket_manager import sio
     await sio.emit("tot_final", {
         "student_id": state["student_id"],
         "final_response": full_lesson,
@@ -833,6 +997,18 @@ graph TD
         "high_confidence": is_high_confidence,
         "rag_sources": state["context_data"].get("rag_sources", []),
         "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL"
+    })
+
+    # --- AUTOMATED SYNTHESIS HANDOFF (Project ID: 25-26J-130) ---
+    await sio.emit("synthesis_complete", {
+        "synthesis_id": interaction_id,
+        "student_id": state["student_id"],
+        "interaction_id": interaction_id,
+        "final_content": full_lesson,
+        "strategy": strategy_label,
+        "rag_sources": state["context_data"].get("rag_sources", []),
+        "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+        "timestamp": datetime.now().isoformat()
     })
 
     return {

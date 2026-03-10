@@ -209,6 +209,7 @@ class ScenarioRequest(BaseModel):
     scenario: str # "confused" | "bored"
     topic_title: Optional[str] = None
     topic_content: Optional[str] = None
+    synthesis_id: Optional[str] = None
 
 class DecomposeRequest(BaseModel):
     goal: str
@@ -568,7 +569,7 @@ async def run_simulation(req: ScenarioRequest):
         "stop_early": False,
         "selected_strategy_label": None,
         "interaction_outcome": None,
-        "interaction_id": None
+        "interaction_id": req.synthesis_id
     }
     
     # Run Agent
@@ -579,7 +580,7 @@ async def run_simulation(req: ScenarioRequest):
         active_student_synthesis.add(student_id)
         final_state = await asyncio.wait_for(
             agent.ainvoke(initial_state, config={"recursion_limit": 20}),
-            timeout=90.0
+            timeout=180.0
         )
         return transform_state_to_graph(final_state)
     except asyncio.TimeoutError:

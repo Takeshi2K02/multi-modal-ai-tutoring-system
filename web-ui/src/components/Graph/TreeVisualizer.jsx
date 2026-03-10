@@ -17,10 +17,9 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     const dagreGraph = new dagre.graphlib.Graph();
     dagreGraph.setDefaultEdgeLabel(() => ({}));
 
-    // Set node size (width 256px + padding, height approx 150px)
-    // Set node size (width 350px + padding, height approx 200px)
-    const nodeWidth = 400; // Increased to allow spacing
-    const nodeHeight = 220; // Increased height
+    // Set node size (width 300px + padding, height approx 250px)
+    const nodeWidth = 400;
+    const nodeHeight = 350;
 
     dagreGraph.setGraph({ rankdir: direction });
 
@@ -48,21 +47,27 @@ const getLayoutedElements = (nodes, edges, direction = 'TB') => {
         return node;
     });
 
-    const layoutedEdges = edges.map((edge) => ({
-        ...edge,
-        type: 'smoothstep',
-        animated: true,
-        style: {
-            stroke: '#6366F1', // primary
-            strokeWidth: 3
-        }
-    }));
+    const layoutedEdges = edges.map((edge) => {
+        const targetNode = nodes.find(n => n.id === edge.target);
+        const isSelected = targetNode?.data?.metadata?.pruning_status === 'Selected' || targetNode?.data?.isBestPath;
+
+        return {
+            ...edge,
+            type: 'smoothstep',
+            animated: !isSelected,
+            style: {
+                stroke: isSelected ? '#00f2ff' : '#6366F1', // Project ID: 25-26J-130: Vibrant Green/Cyan highlight
+                strokeWidth: isSelected ? 6 : 3,
+                filter: isSelected ? 'drop-shadow(0 0 12px rgba(0, 242, 255, 0.8))' : 'none'
+            }
+        };
+    });
 
     return { nodes: layoutedNodes, edges: layoutedEdges };
 };
 
 
-const TreeVisualizer = ({ data, onAnimationComplete }) => {
+const TreeVisualizer = ({ data, onAnimationComplete, progressivePlayback = true }) => {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const { fitView } = useReactFlow();
@@ -74,42 +79,44 @@ const TreeVisualizer = ({ data, onAnimationComplete }) => {
     const [playbackIndex, setPlaybackIndex] = useState(0);
     const [isPybackComplete, setIsPlaybackComplete] = useState(false);
 
-    // 1. Initial Layout Calculation (Runs once when data arrives)
+    // 1. Layout Calculation
     React.useEffect(() => {
-        if (data && data.nodes && data.edges) {
+        if (data && data.nodes && data.nodes.length > 0) {
             const layouted = getLayoutedElements(data.nodes, data.edges);
 
-            // Sort nodes by rank/depth visually (Top-Down BFS roughly based on Y position)
-            // This ensures they appear top-to-bottom, "thinking" step by step.
-            const sortedNodes = [...layouted.nodes].sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+            // Only reset playback if it's a completely new synthesis session OR the first node
+            const isNewSession = data.nodes.length <= 1;
 
-            setFullLayout({ nodes: sortedNodes, edges: layouted.edges });
-            setPlaybackIndex(0);
-            setIsPlaybackComplete(false);
-            setNodes([]); // Start empty
-            setEdges([]);
+            if (isNewSession) {
+                setNodes([]);
+                setEdges([]);
+                setPlaybackIndex(0);
+                setIsPlaybackComplete(false);
+            }
+
+            setFullLayout({ nodes: layouted.nodes, edges: layouted.edges });
         }
-    }, [data, setNodes, setEdges]); // Removed fitView dependency to avoid loops
+    }, [data, setNodes, setEdges]);
 
     // 2. Playback Loop
     React.useEffect(() => {
-        if (!fullLayout || isPybackComplete) return;
+        if (!fullLayout || isPybackComplete || !progressivePlayback) return;
 
         const interval = setInterval(() => {
             setPlaybackIndex((prev) => {
                 const nextIndex = prev + 1;
-
-                // Check if done
                 if (nextIndex >= fullLayout.nodes.length) {
-                    setIsPlaybackComplete(true);
-                    return prev; // Stop incrementing
+                    // Check if we reached the absolute end of the current known layout
+                    // but don't mark as complete if synthesis is still active?
+                    // For now, simple length check
+                    return prev;
                 }
                 return nextIndex;
             });
-        }, 800); // 800ms per node "thought"
+        }, 600); // Faster playback for real-time feel
 
         return () => clearInterval(interval);
-    }, [fullLayout, isPybackComplete]);
+    }, [fullLayout?.nodes?.length, isPybackComplete, progressivePlayback]);
 
     // Trigger completion callback
     React.useEffect(() => {
@@ -122,7 +129,10 @@ const TreeVisualizer = ({ data, onAnimationComplete }) => {
     React.useEffect(() => {
         if (!fullLayout) return;
 
-        const visibleNodes = fullLayout.nodes.slice(0, playbackIndex + 1);
+        const visibleNodes = progressivePlayback
+            ? fullLayout.nodes.slice(0, playbackIndex + 1)
+            : fullLayout.nodes;
+
         const visibleNodeIds = new Set(visibleNodes.map(n => n.id));
 
         // Connect edges only if both source and target are visible
@@ -135,13 +145,14 @@ const TreeVisualizer = ({ data, onAnimationComplete }) => {
 
         // Smooth Fit View on updates
         if (visibleNodes.length > 0) {
-            fitView({ padding: 0.2, duration: 500 }); // Smooth pan
+            // Project ID: 25-26J-130: Ensure root is visible by adding vertical padding
+            fitView({ padding: 0.4, duration: 1000 });
         }
 
     }, [playbackIndex, fullLayout, setNodes, setEdges, fitView]);
 
     return (
-        <div className="flex-1 h-full bg-edu-bg-light dark:bg-edu-bg-dark transition-colors">
+        <div className="flex-1 h-full bg-edu-bg-light dark:bg-edu-bg-dark transition-colors relative z-[100]">
             <ReactFlow
                 nodes={nodes}
                 edges={edges}

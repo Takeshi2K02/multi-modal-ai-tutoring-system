@@ -248,7 +248,7 @@ const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, corr
     );
 };
 
-const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => {
+const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedContent }) => {
     const [loading, setLoading] = useState(true);
     const [content, setContent] = useState(null);
     const [isThinking, setIsThinking] = useState(true);
@@ -288,6 +288,26 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => {
             setShadowReady(null);
             try {
                 const topicId = topic.id || topic.title;
+
+                // Project ID: 25-26J-130: Phase 4 Direct Handoff
+                if (preGeneratedContent) {
+                    console.log(">>> [LessonView] Initializing with Pre-Generated Content:", preGeneratedContent);
+                    const directive = {
+                        type: preGeneratedContent.current_modality === 'VISUAL' ? 'visual_explanation' : 'explanation',
+                        content: preGeneratedContent.final_content
+                    };
+                    setContent(directive);
+                    setInteractionId(preGeneratedContent.interaction_id);
+                    setStrategyLabel(preGeneratedContent.strategy);
+                    setRagSources(preGeneratedContent.rag_sources || []);
+                    setCurrentModality(preGeneratedContent.current_modality || 'TEXTUAL');
+
+                    setIsThinking(false);
+                    setLoading(false);
+                    onReady?.();
+                    return;
+                }
+
                 const existing = await getLessonContent("alex_123", topicId);
 
                 if (signal.aborted) return;
