@@ -76,3 +76,7 @@ class AgentState(TypedDict):
     shadow_frontier: List[ThoughtNode]
     is_completed: bool
     estimated_reading_time: int
+    
+    # Phase 19: Atomic Synthesis Guards
+    handoff_buffer: List[Dict[str, Any]]
+    synthesis_locked: bool

@@ -956,15 +956,17 @@ async def handle_user_feedback(req: UserFeedbackRequest):
         # 5. Update Interaction Outcome (Project ID: 25-26J-130)
         if req.interaction_id:
             outcome = "Positive" if req.sentiment else "Negative"
+            
+            # Project ID: 25-26J-130: Robust ID handling for syn-* strings
+            try:
+                db_id = ObjectId(req.interaction_id)
+            except Exception:
+                db_id = req.interaction_id
+
             db.interactions.update_one(
-                {"_id": req.interaction_id}, # Note: Assume it's an ObjectId or string depending on client
+                {"_id": db_id},
                 {"$set": {"outcome": outcome}}
             )
-            # Try by string ID if ObjectId fails in client code
-            from bson import ObjectId
-            try:
-                db.interactions.update_one({"_id": ObjectId(req.interaction_id)}, {"$set": {"outcome": outcome}})
-            except: pass
         
         return {"status": "success", "new_weights": weights}
     except Exception as e:
@@ -991,8 +993,14 @@ async def accept_shadow_intervention(req: AcceptShadowRequest):
         
         # 1. Mark shadow as accepted in interactions
         from bson import ObjectId
+        # Project ID: 25-26J-130: Robust ID handling for syn-* strings
+        try:
+            db_id = ObjectId(req.interaction_id)
+        except Exception:
+            db_id = req.interaction_id
+
         db.interactions.update_one(
-            {"_id": ObjectId(req.interaction_id)},
+            {"_id": db_id},
             {"$set": {"shadow_accepted": True}}
         )
         

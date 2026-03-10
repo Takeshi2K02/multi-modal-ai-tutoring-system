@@ -3,7 +3,7 @@ import { Handle, Position } from 'reactflow';
 import clsx from 'clsx';
 
 const ThoughtNode = ({ data, isConnectable }) => {
-    const { label, localScore, pathScore, type, isBestPath, depth, metadata } = data;
+    const { label, localScore, pathScore, type, isBestPath, depth, metadata, isSynthesisComplete } = data;
     const { strategy_name, internal_thought, pruning_status } = metadata || {};
 
     // Strict Deep Oceanic Status Scale (ID: 25-26J-130)
@@ -22,16 +22,29 @@ const ThoughtNode = ({ data, isConnectable }) => {
 
     const isRoot = depth === 0;
 
-    const isSelected = isBestPath || pruning_status === 'Selected';
+    const isWinningPath = isBestPath;
+    const isBeamSelected = pruning_status === 'Selected';
+    const isBeamCandidate = pruning_status === 'Beam';
 
     const wrapperClasses = clsx(
-        "relative flex flex-col font-sans transition-all duration-500 rounded-3xl backdrop-blur-3xl bg-[#141414]/95 border-2 border-[#00f2ff] shadow-2xl font-semibold",
+        "relative flex flex-col font-sans transition-all duration-500 rounded-3xl backdrop-blur-3xl bg-[#141414]/95 border-2 shadow-2xl font-semibold",
         baseBorderColor,
-        isSelected ? "ring-2 ring-[#00AFB9]/50 scale-105 z-10 shadow-[0_0_40px_rgba(0,242,255,0.4),0_0_15px_#00f2ff] opacity-100" : "opacity-100 grayscale-0 hover:scale-105"
+        isWinningPath
+            ? "border-[#00f2ff] ring-2 ring-[#00AFB9]/50 scale-105 z-[100] shadow-[0_0_40px_rgba(0,242,255,0.4),0_0_15px_#00f2ff] opacity-100"
+            : isBeamSelected && !isSynthesisComplete
+                ? "border-[#00f2ff] ring-1 ring-[#00AFB9]/30 scale-[1.02] z-10 opacity-100 shadow-[0_0_20px_rgba(0,242,255,0.2)]"
+                : isBeamCandidate && !isSynthesisComplete
+                    ? "border-[#00f2ff]/30 opacity-100 z-10"
+                    : "border-white/5 opacity-60 grayscale-[40%] hover:opacity-100 hover:grayscale-0 hover:scale-105 hover:border-white/20"
     );
 
-    const SelectionBadge = isSelected && !isRoot ? (
-        <div className="absolute -top-3 -right-3 bg-[#00AFB9] text-white text-[8px] font-black px-3 py-1.5 rounded-full shadow-[0_0_20px_rgba(0,175,185,0.5)] animate-pulse z-20">
+    const SelectionBadge = isWinningPath && !isRoot ? (
+        <div className="absolute -top-3 -right-3 bg-[#00f2ff] text-black text-[9px] font-black px-4 py-2 rounded-full shadow-[0_0_20px_rgba(0,242,255,0.6)] animate-pulse z-20 flex items-center gap-1.5 border border-white/20">
+            <div className="w-1.5 h-1.5 rounded-full bg-black shadow-[0_0_5px_black]" />
+            BEST PATH
+        </div>
+    ) : isBeamSelected && !isRoot && !isSynthesisComplete ? (
+        <div className="absolute -top-3 -right-3 bg-[#00f2ff] text-black text-[8px] font-black px-3 py-1.5 rounded-full shadow-[0_0_15px_rgba(0,242,255,0.4)] z-20 border border-white/20">
             CHOSEN
         </div>
     ) : null;
@@ -40,8 +53,9 @@ const ThoughtNode = ({ data, isConnectable }) => {
         <div className={clsx(
             "px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-tighter border",
             pruning_status === "Selected" ? "bg-primary/20 text-primary border-primary/30" :
-                pruning_status === "Pruned" ? "bg-red-500/10 text-red-400 border-red-500/20" :
-                    "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
+                pruning_status === "Beam" ? "bg-[#48CAE4]/20 text-[#48CAE4] border-[#48CAE4]/30" :
+                    pruning_status === "Pruned" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                        "bg-zinc-500/10 text-zinc-400 border-zinc-500/20"
         )}>
             {pruning_status}
         </div>
@@ -58,7 +72,14 @@ const ThoughtNode = ({ data, isConnectable }) => {
                     <span className="text-[9px] font-bold uppercase tracking-[0.2em] text-white line-clamp-1 text-shadow-sm">
                         {strategy_name || type || "Thought"}
                     </span>
-                    {StatusBadge}
+                    <div className="flex items-center gap-1.5">
+                        {StatusBadge}
+                        {!isRoot && type !== 'final' && (
+                            <span className="text-[7px] font-black text-secondary uppercase tracking-widest opacity-80">
+                                STRATEGY BLUEPRINT
+                            </span>
+                        )}
+                    </div>
                 </div>
                 <div className={clsx("px-2.5 py-1 rounded-full text-[10px] font-bold flex items-center gap-1.5 border shrink-0 text-white shadow-[0_0_10px_rgba(0,242,255,0.3)]", scoreStyles)}>
                     <div className="w-1.5 h-1.5 rounded-full bg-current shadow-[0_0_8px_currentColor]" />

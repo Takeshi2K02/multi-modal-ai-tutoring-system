@@ -24,9 +24,9 @@ import time
 
 # Configuration
 CONFIG = ToTConfig(
-    max_depth=3, # Multi-level split for Research (Project ID: 25-26J-130)
-    beam_width=3, # Increased beam width for Shadow Branching
-    branching_factor=3, # PROJECT ID: 25-26J-130: Boost branching for richer research trees
+    max_depth=2, # Exactly 3 stages: Root (0), L1 (1), L2 (2)
+    beam_width=3, 
+    branching_factor=3, 
     score_threshold=0.85
 )
 
@@ -125,10 +125,11 @@ async def retrieve_context(state: AgentState) -> AgentState:
             **root_node.metadata,
             "strategy_name": "Root Inquiry",
             "internal_thought": "Initializing synthesis based on student profile and live CV state.",
-            "pruning_status": "Selected",
+            "pruning_status": "Active",
             "localScore": root_node.score,
             "pathScore": root_node.path_score
         },
+        "rag_sources": rag_sources,
         "timestamp": datetime.now().isoformat()
     })
     
@@ -153,6 +154,8 @@ async def retrieve_context(state: AgentState) -> AgentState:
         "shadow_frontier": [], # Initialize shadow_frontier here
         "is_completed": False,
         "estimated_reading_time": estimated_reading_time,
+        "synthesis_locked": False,
+        "handoff_buffer": [],
         "build_time": time.time(),
         "stop_early": False
     }
@@ -213,6 +216,15 @@ async def expand_frontier(state: AgentState) -> AgentState:
                 "timestamp": datetime.now().isoformat()
             })
             
+    # Broadcast for UI Toast (Project ID: 25-26J-130)
+    snapshot = state["context_data"].get("snapshot", {})
+    await sio.emit("tot_step", {
+        "step": "EXPANDING_FRONTIER",
+        "message": f"Expanding frontier to Depth {next_depth}...",
+        "synthesis_id": state.get("interaction_id"),
+        "depth": next_depth
+    })
+
     return {**state, "frontier": new_frontier, "tree_memory": tree_memory}
 
 async def _generate_children_content(state: AgentState, parent_node: ThoughtNode, target_depth: int) -> List[Dict]:
@@ -241,10 +253,10 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 Goal: {query}
                 Policy Action: {rl_strategy} (ID: {action_id})
                 
-                PRUNING CONSTRAINT: {pruning_logic}
+                TASK: Generate {k} light-weight Strategy Blueprints (Max 100 words each).
+                A blueprint must be concise and include: [Strategy Name], [Methodology], and [Predicted Engagement Score].
                 
-                TASK: Generate {k} strategies.
-                JSON FORMAT: {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "mentorship-style approach" }} ] }}
+                JSON FORMAT: {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "Concise blueprint methodology..." }} ] }}
                 """,
                 input_variables=["action_id", "rl_strategy", "pruning_logic", "query", "k"]
             )
@@ -322,39 +334,19 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 Goal: {query}
                 Strategy: {strategy} ({approach})
                 
-                TASK: Provide {k} variations.
+                TASK: Provide {k} variations as 'Strategy Blueprints'.
                 STRICT REQUIREMENT: 
                 1. Anchored primarily in Grounded Evidence.
-                2. Use BI terminology (Facts, Dimensions, Star Schemas, Warehousing).
-                3. TRIGGER MULTIMODAL RENDERING: If technical structure is complex, include a Mermaid.js diagram using tags:
-                   [MERMAID_START]
-                   graph TD
-                   ...
-                   [MERMAID_END]
+                2. Use BI terminology (Facts, Dimensions, Star Schemas).
+                3. DO NOT generate full lesson text. ONLY provide a high-level instructional blueprint (max 100 words).
                 
                 STRICT JSON OUTPUT FORMAT (MANDATORY):
                 {{
                     "options": [
                         {{
                             "directive": {{
-                                "type": "explanation | quiz | challenge",
-                                "content": "Full pedagogical content (Markdown) with [MERMAID_START]...[MERMAID_END] or [IMAGE_FOR_ALEX] tags if needed",
-                                "quiz": {{ 
-                                    "questions": [
-                                        {{
-                                            "question": "The MCQ Question",
-                                            "options": ["A", "B", "C", "D"],
-                                            "correct_index": 0,
-                                            "explanation": "Why A is correct"
-                                        }}
-                                    ],
-                                    "type": "multiple-choice"
-                                }},
-                                "challenge": {{
-                                    "type": "text",
-                                    "description": "Challenge description",
-                                    "attributes_required": 3
-                                }}
+                                "type": "blueprint",
+                                "content": "STRATEGY BLUEPRINT: [Methodology] ... [Pedagogical Goal] ... "
                             }}
                         }}
                     ]
@@ -419,7 +411,7 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                             "content": content_val[:100] + "..." if content_val and len(content_val) > 100 else content_val,
                             "metadata": {
                                 "strategy_name": parent_node.metadata.get("strategy_name", "Synthesis"),
-                                "internal_thought": content_val,
+                                "internal_thought": directive.get("content", content_val), # Use directive content for internal thought
                                 "directive": directive,
                                 "type": "variation"
                             }
@@ -439,20 +431,18 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 Goal: {query}
                 Path Reasoning: {internal_thought}
                 
-                TASK: Synthesize the Finalized Path for the lesson. 
+                TASK: Finalize the reasoning path with a 'Conclusion Blueprint'.
                 STRICT REQUIREMENT: 
-                - Ensure the content is cohesive and ready for multimodal delivery.
-                - If the previous path was 'Visual', confirm the visual aids are sufficient.
-                - If 'Textual', ensure the first principles logic is sound.
+                - Do NOT generate full lesson text.
+                - Summarize the final pedagogical goal and transition to synthesis.
                 
                 JSON FORMAT:
                 {{
                     "options": [
                         {{
                             "directive": {{
-                                "type": "final_synthesis",
-                                "content": "The finalized lesson content...",
-                                "status": "Ready for Lesson View"
+                                "type": "final_blueprint",
+                                "content": "FINAL BLUEPRINT: [Conclusion Strategy] ... [Multimodal Requirements] ..."
                             }}
                         }}
                     ]
@@ -536,8 +526,7 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
         node.path_score = path_score
         scored_frontier.append(node)
         
-        # --- REAL-TIME SCORING BROADCAST (Project ID: 25-26J-130) ---
-        # Re-emitting node_discovered with updated scores for 'Evaluation Phase' visibility
+        # --- PHASE 18: POST-EVALUATION BROADCAST ---
         from socket_manager import sio
         await sio.emit("node_discovered", {
             "synthesis_id": state.get("interaction_id"),
@@ -609,14 +598,38 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
                     top_two[0].score += 0.01
                     top_two[0].path_score += 0.01
             
+    # --- PHASE 18: SCORE-SYNCED PATH SELECTION ---
+    if scored_frontier:
+        # 1. Identify best node among siblings at this depth
+        best_at_depth = max(scored_frontier, key=lambda x: x.path_score)
+        
+        # 2. Apply Threshold and Emit Selection
+        if best_at_depth.path_score > 0.90:
+            print(f"[ToT] 🏆 >>> Path Selected (Score {best_at_depth.path_score:.2f} > 0.90): Node {best_at_depth.id}")
+            best_at_depth.metadata["pruning_status"] = "Selected"
+            
+            await sio.emit("path_selected", {
+                "synthesis_id": state.get("interaction_id"),
+                "id": best_at_depth.id,
+                "parent_id": best_at_depth.parent_id,
+                "path_score": best_at_depth.path_score,
+                "depth": best_at_depth.depth
+            })
+
     # Broadcast to Admin Dashboard
-    from socket_manager import sio
     await sio.emit("tot_step", {
         "step": "evaluate_frontier",
         "scores": [n.score for n in scored_frontier],
         "early_stop": stop_early
     })
     
+    # Broadcast for UI Toast (Project ID: 25-26J-130)
+    await sio.emit("tot_step", {
+        "step": "EVALUATING_FRONTIER",
+        "message": "Evaluating potential paths for optimal learning...",
+        "synthesis_id": state.get("interaction_id")
+    })
+
     return {**state, "frontier": scored_frontier, "best_node": current_best, "stop_early": stop_early}
 
 async def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory: Dict[str, ThoughtNode]) -> float:
@@ -680,6 +693,14 @@ async def prune_frontier(state: AgentState) -> AgentState:
     if not frontier:
         return state
         
+    from socket_manager import sio
+    # Broadcast for UI Toast (Project ID: 25-26J-130)
+    await sio.emit("tot_step", {
+        "step": "PRUNING_FRONTIER",
+        "message": f"Narrowing focus to top {CONFIG.beam_width} reasoning paths...",
+        "synthesis_id": state.get("interaction_id")
+    })
+        
     # Standard beam search sorting by path_score
     # Tie-breaker: mastery_level from snapshot
     snapshot = state["context_data"].get("snapshot", {})
@@ -693,9 +714,25 @@ async def prune_frontier(state: AgentState) -> AgentState:
     # I will modify the sorting key here to be (path_score, mastery)
     sorted_frontier = sorted(frontier, key=lambda x: (x.path_score, mastery), reverse=True)
     beam = sorted_frontier[:CONFIG.beam_width]
-    
-    # Broadcast to Admin Dashboard
+
+    # Project ID: 25-26J-130: Real-time status propagation for intermediate nodes
     from socket_manager import sio
+    for node in sorted_frontier:
+        status = "Beam" if node in beam and node.metadata.get("pruning_status") != "Selected" else \
+                 "Selected" if node.metadata.get("pruning_status") == "Selected" else "Pruned"
+        
+        await sio.emit("node_discovered", {
+            "synthesis_id": state.get("interaction_id"),
+            "id": node.id,
+            "metadata": {
+                **node.metadata,
+                "pruning_status": status,
+                "localScore": node.score,
+                "pathScore": node.path_score
+            }
+        })
+
+    # Broadcast to Admin Dashboard
     await sio.emit("tot_step", {
         "step": "prune_frontier",
         "beam_size": len(beam)
@@ -788,13 +825,36 @@ async def background_synthesis(state: AgentState) -> AgentState:
     print("[ToT] ✅ Shadow ToT Synthesis Complete & Broadcasted.")
     return {**state, "shadow_frontier": [shadow_best]}
 
+async def finalizer_fan_out(state: AgentState) -> AgentState:
+    """
+    Passthrough node to trigger parallel finalization (Phase 19.2).
+    """
+    print("[ToT] 🚀 --- Node: Finalizer Fan-Out (Concurrent Main & Shadow) ---")
+    return state
+
 async def finalize_output(state: AgentState) -> AgentState:
     """
     Node 5: Final output generation and latency calculation.
     """
     print("[ToT] 🏁 --- Node: Finalize Output ---")
+    
+    # 1. ATOMIC SELECTION GUARD (Phase 19)
+    if state.get("synthesis_locked"):
+        print("[ToT] ⚠️ --- BLOCKED: Synthesis already in progress. Ignoring duplicate call. ---")
+        return state
+        
     best_node = state.get("best_node")
-    tree_memory = state["tree_memory"] # Keep this line from original
+    if not best_node or best_node.metadata.get("pruning_status") != "Selected":
+        print(f"[ToT] 🛑 --- BLOCKED: Node {best_node.id if best_node else 'N/A'} is NOT 'Selected'. Returning. ---")
+        return state
+
+    # LOCK PATH FOR SYNTHESIS
+    interaction_id = state.get("interaction_id")
+    tree_memory = state["tree_memory"]
+    
+    # 2. LOGGING VALIDATION
+    sibling_count = len([n for n in tree_memory.values() if n.depth == best_node.depth]) - 1
+    print(f"[Finalizer] --- LOCKED PATH: {best_node.id} | Discarding {sibling_count} sibling payloads ---")
 
     # Calculate build_time telemetry
     start_time = state.get("build_time", time.time())
@@ -827,26 +887,28 @@ async def finalize_output(state: AgentState) -> AgentState:
     synthesis_prompt = ChatPromptTemplate.from_template("""
         Role: Senior Pedagogical Architect.
         Context: {query}
-        Selected Thought: {thought}
-        Strategy: {strategy}
+        Selected Strategy Path (Blueprints): {thought}
+        Strategy Label: {strategy}
         
-        TASK: Expand this thought into a full multimodal lesson for a student.
+        TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a comprehensive multimodal lesson.
+        
         REQUIREMENTS:
         1. Start with a specific analogy: THE SUPERMARKET RECEIPT ANALOGY. 
-           (CRITICAL: Do NOT use ANY other analogies like Lego City or Skyscrapers).
-        2. Explain 3 key technical terms related to Dimensional Modelling (Facts, Dimensions, Grain).
-        3. Include a [MERMAID_START] diagram using [MERMAID_END] tags.
-           - STRICT MERMAID RULES:
-             - Use 'graph TD' syntax.
-             - Central Node MUST be 'FactReceiptLineItem'.
-             - Surround it with EXACTLY 5 dimensions: DimDate, DimProduct, DimStore, DimCustomer, DimPromotion.
-             - Lay it out as a Star Schema (Fact in center, Dimensions pointing to it).
-             - Labels MUST NOT contain brackets [], parentheses (), or bolding **.
-             - Use simple arrows --> only.
-        4. Maintain an encouraging, professional tone.
+           (CRITICAL: Do NOT use ANY other analogies).
+        2. Expand on the technical methodologies mentioned in the blueprints.
+        3. Explain 3 key technical terms related to Dimensional Modelling (Facts, Dimensions, Grain).
+        4. Include a [MERMAID_START] diagram using [MERMAID_END] tags.
+           - Central Node MUST be 'FactReceiptLineItem'.
+           - Surround it with EXACTLY 5 dimensions: DimDate, DimProduct, DimStore, DimCustomer, DimPromotion.
+           - Lay it out as a Star Schema.
+        5. Use BI terminology (Facts, Dimensions, Star Schemas).
+        6. Maintain an encouraging, professional tone.
         
         OUTPUT: Pure Markdown text with multimodal tags.
     """)
+    
+    # Trace the full path content for synthesis context
+    blueprint_trace = " -> ".join([n.content for n in path])
     
     thought_content = best_node.content if best_node else "No specific thought selected."
     final_prompt = synthesis_prompt.format(
@@ -862,7 +924,7 @@ async def finalize_output(state: AgentState) -> AgentState:
         chain = synthesis_prompt | final_llm | StrOutputParser()
         full_lesson = await chain.ainvoke({
             "query": state["user_query"],
-            "thought": thought_content,
+            "thought": blueprint_trace,
             "strategy": strategy_label
         })
         
@@ -964,8 +1026,15 @@ graph TD
 
     async def save_mem():
         memory = MemoryManager()
+        
+        # Project ID: 25-26J-130: Robust ID handling for syn-* strings
+        try:
+            db_id = ObjectId(interaction_id)
+        except Exception:
+            db_id = interaction_id
+
         memory.save_interaction({
-            "_id": ObjectId(interaction_id), # Ensure we use the same ID
+            "_id": db_id, # Ensure we use the same ID
             "student_id": state["student_id"],
             "query": state["user_query"],
             "strategy": strategy_label,
@@ -999,7 +1068,11 @@ graph TD
         "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL"
     })
 
-    # --- AUTOMATED SYNTHESIS HANDOFF (Project ID: 25-26J-130) ---
+    # --- PAYLOAD PURGE (Phase 19) ---
+    # Clear the 'handoff_buffer' immediately after the first 'Finalize Output' call
+    # and mark synthesis as locked to prevent duplicate Socket.IO emissions.
+    updated_handoff = []
+    
     await sio.emit("synthesis_complete", {
         "synthesis_id": interaction_id,
         "student_id": state["student_id"],
@@ -1024,7 +1097,9 @@ graph TD
         "interaction_id": interaction_id,
         "build_time": latency,
         "estimated_reading_time": estimated_reading_time,
-        "shadow_frontier": shadow_frontier
+        "shadow_frontier": shadow_frontier,
+        "synthesis_locked": True,
+        "handoff_buffer": updated_handoff
     }
 
 def create_tot_graph():
@@ -1034,9 +1109,9 @@ def create_tot_graph():
     workflow.add_node("expand_frontier", expand_frontier)
     workflow.add_node("evaluate_frontier", evaluate_frontier)
     workflow.add_node("prune_frontier", prune_frontier)
-    workflow.add_node("finalize_output", finalize_output)
-    
     workflow.add_node("background_synthesis", background_synthesis)
+    workflow.add_node("finalize_output", finalize_output)
+    workflow.add_node("finalizer_fan_out", finalizer_fan_out)
     
     workflow.set_entry_point("retrieve_context")
     
@@ -1049,11 +1124,16 @@ def create_tot_graph():
         check_stop_condition,
         {
             "expand": "expand_frontier",
-            "finalize": "background_synthesis" # Check for shadow ToT before finishing
+            "finalize": "finalizer_fan_out" # Phase 19.2: Point to fan-out node
         }
     )
 
-    workflow.add_edge("background_synthesis", "finalize_output")
+    # Parallel edges from fan-out
+    workflow.add_edge("finalizer_fan_out", "finalize_output")
+    workflow.add_edge("finalizer_fan_out", "background_synthesis")
+
+    # Shadow ToT is isolated; it emits 'shadow_ready' and ends.
+    workflow.add_edge("background_synthesis", END)
     workflow.add_edge("finalize_output", END)
     
     return workflow.compile()

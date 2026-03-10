@@ -50,6 +50,8 @@ const AgentDebugger = ({ context, onComplete }) => {
     const [countdown, setCountdown] = useState(null);
     const [profile] = useState(context?.profile || {});
     const [cvMetrics, setCvMetrics] = useState({ emotion: 'Neutral', score: 0.85, gaze: 'Focused', posture: 'Vertical' });
+    const [playbackFinished, setPlaybackFinished] = useState(false);
+    const [currentStep, setCurrentStep] = useState(null);
     const [rlPolicy, setRlPolicy] = useState({});
     const [thoughtStream, setThoughtStream] = useState([]);
     const [finalPayload, setFinalPayload] = useState(null);
@@ -58,13 +60,18 @@ const AgentDebugger = ({ context, onComplete }) => {
 
     // 1. Real-time Node Discovery & Reasoning Listeners
     useEffect(() => {
+        socket.on('tot_step', (data) => {
+            if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
+            setCurrentStep(data);
+            if (data.step) setStatus(data.step.replace(/_/g, ' '));
+        });
+
         socket.on('node_discovered', (node) => {
             if (context?.synthesis_id && node.synthesis_id !== context.synthesis_id) return;
 
             setNodes((prev) => {
                 const exists = prev.find(n => n.id === node.id);
                 if (exists) {
-                    // Project ID: 25-26J-130: Update scores for Evaluation visibility
                     return prev.map(n => n.id === node.id ? {
                         ...n,
                         data: {
@@ -93,17 +100,20 @@ const AgentDebugger = ({ context, onComplete }) => {
             });
 
             if (node.parent_id) {
-                setEdges((prev) => [
-                    ...prev,
-                    {
-                        id: `e-${node.parent_id}-${node.id}`,
-                        source: node.parent_id,
-                        target: node.id,
-                        animated: true
-                    }
-                ]);
+                setEdges((prev) => {
+                    const edgeId = `e-${node.parent_id}-${node.id}`;
+                    if (prev.find(e => e.id === edgeId)) return prev;
+                    return [
+                        ...prev,
+                        {
+                            id: edgeId,
+                            source: node.parent_id,
+                            target: node.id,
+                            animated: true
+                        }
+                    ];
+                });
             }
-            setStatus(`Discovering Thought: Depth ${node.depth}`);
         });
 
         socket.on('thought_stream', (data) => {
@@ -124,43 +134,96 @@ const AgentDebugger = ({ context, onComplete }) => {
             setRlPolicy(data.distribution);
         });
 
+        socket.on('path_selected', (data) => {
+            if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
+            console.log(">>> [Debugger] 🏆 path_selected:", data.id);
+            setNodes((prev) => prev.map(n => n.id === data.id ? {
+                ...n,
+                data: {
+                    ...n.data,
+                    metadata: { ...n.data.metadata, pruning_status: 'Selected' }
+                }
+            } : n));
+        });
+
         socket.on('synthesis_complete', (data) => {
             if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
-
-            setStatus('Synthesis Complete');
-            console.log(">>> [Debugger] Synthesis Complete. Payload Captured:", data);
+            console.log(">>> [Debugger] 🏁 synthesis_complete received:", data.synthesis_id);
             setFinalPayload(data);
             setIsComplete(true);
-            setCountdown(3); // Project ID: 25-26J-130: 3s Inspection Buffer
+            setCurrentStep({ step: 'COMPLETE', message: 'Synthesis Finalized.' });
+
+            // Update all nodes with isComplete status for visual cleanup
+            setNodes((prev) => prev.map(n => ({
+                ...n,
+                data: { ...n.data, isSynthesisComplete: true }
+            })));
         });
 
         return () => {
+            socket.off('tot_step');
             socket.off('node_discovered');
             socket.off('thought_stream');
             socket.off('cv_update');
             socket.off('policy_update');
+            socket.off('path_selected');
             socket.off('synthesis_complete');
         };
     }, [context?.synthesis_id]);
 
-    // 2. Automated Handoff Countdown
+    // 2. Automatic Handoff (Phase 20: Autonomous Topic Execution)
     useEffect(() => {
-        if (countdown === null) return;
-        if (countdown > 0) {
-            const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+        if (isComplete && playbackFinished && finalPayload) {
+            console.log(">>> [Debugger] 🚀 Auto-redirecting to Lesson View...");
+            const timer = setTimeout(() => handleProceed(), 1500); // Brief pause for user to see the "Finalized" state
             return () => clearTimeout(timer);
-        } else {
-            // Project ID: 25-26J-130: Ensure handoff only happens if Finalized Path is rendered
-            // Fallback: If isComplete is true for >5s, navigate anyway to prevent stall
-            const hasFinalNode = nodes.some(n => n.data?.metadata?.type === 'final');
-            if (hasFinalNode || isComplete) {
-                onComplete && onComplete(finalPayload);
-            }
         }
-    }, [countdown, onComplete, finalPayload, nodes, isComplete]);
+    }, [isComplete, playbackFinished, finalPayload]);
+
+    // 2. Handoff Logic (Manual Proceed)
+    const handleProceed = () => {
+        if (onComplete) {
+            onComplete(finalPayload);
+        }
+    };
+
+    const StatusToast = () => (
+        <AnimatePresence>
+            {currentStep && currentStep.step !== 'COMPLETE' && (
+                <motion.div
+                    initial={{ opacity: 0, y: -20, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    className="absolute top-10 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-4 px-6 py-3 bg-zinc-900/90 backdrop-blur-2xl border border-white/10 rounded-full shadow-[0_0_30px_rgba(0,0,0,0.5)] group"
+                >
+                    <div className="relative w-5 h-5">
+                        <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="w-full h-full border-2 border-primary border-t-transparent rounded-full"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-1 h-1 bg-primary rounded-full animate-pulse" />
+                        </div>
+                    </div>
+                    <div className="flex flex-col">
+                        <span className="text-[10px] font-black tracking-[0.2em] text-primary uppercase leading-tight">
+                            {currentStep.step.replace(/_/g, ' ')}
+                        </span>
+                        <span className="text-[11px] font-medium text-white/70 tracking-tight leading-none mt-0.5">
+                            {currentStep.message || "Synthesizing next stratum..."}
+                        </span>
+                    </div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
 
     return (
         <div className="flex h-full w-full bg-zinc-950 text-white relative overflow-hidden font-sans">
+            {/* TOAST FEEDBACK */}
+            <StatusToast />
+
             {/* LEFT PANEL: Student Profile */}
             <AnimatePresence>
                 {showLeftPanel && (
@@ -227,7 +290,9 @@ const AgentDebugger = ({ context, onComplete }) => {
             <div className="flex-1 relative h-full bg-[#050505] z-10 overflow-hidden">
                 <TreeVisualizer
                     data={{ nodes, edges }}
-                    progressivePlayback={false}
+                    progressivePlayback={true}
+                    isComplete={isComplete}
+                    onAnimationComplete={() => setPlaybackFinished(true)}
                 />
 
                 <ReasoningTerminal logs={thoughtStream} leftExpanded={showLeftPanel} rightExpanded={showRightPanel} />
@@ -241,19 +306,44 @@ const AgentDebugger = ({ context, onComplete }) => {
                     </div>
                 )}
 
-                {/* Handoff Overlay */}
+                {/* Handoff Overlay (Project ID: 25-26J-130: Manual Proceed) */}
                 <AnimatePresence>
-                    {isComplete && (
+                    {isComplete && playbackFinished && (
                         <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="absolute bottom-48 left-1/2 -translate-x-1/2 bg-primary/90 text-white backdrop-blur-md px-10 py-6 rounded-3xl shadow-2xl border border-white/10 flex items-center gap-8 z-50"
+                            initial={{ opacity: 0, scale: 0.9, y: 40 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            className="absolute inset-0 flex items-center justify-center bg-edu-bg-dark/60 backdrop-blur-md z-[1000]"
                         >
-                            <div className="flex flex-col">
-                                <span className="text-[12px] font-black uppercase tracking-[0.3em] text-white/70">Path Finalized</span>
-                                <span className="text-lg font-light">Navigating to lesson view in {countdown}s...</span>
-                            </div>
-                            <Sparkles className="text-secondary animate-pulse" size={32} />
+                            <motion.div
+                                className="bg-[#0D0D3B]/95 text-white p-12 rounded-[50px] shadow-[0_0_80px_rgba(0,0,0,0.8)] border border-primary/30 text-center max-w-xl relative overflow-hidden group"
+                            >
+                                <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity duration-1000" />
+                                <div className="relative z-10 space-y-8">
+                                    <div className="w-20 h-20 bg-primary/20 rounded-full flex items-center justify-center mx-auto border border-primary/40 shadow-[0_0_30px_rgba(99,102,241,0.3)]">
+                                        <ShieldCheck size={40} className="text-primary" />
+                                    </div>
+                                    <div className="space-y-3">
+                                        <h2 className="text-4xl font-light tracking-tight text-white">Path <span className="text-primary font-bold">Finalized</span></h2>
+                                        <p className="text-lg text-slate-400 font-light">The agent has synthesized the optimal multimodal strategy.</p>
+                                    </div>
+
+                                    <button
+                                        onClick={handleProceed}
+                                        className="group/btn relative w-full px-10 py-6 bg-primary text-white text-sm font-black uppercase tracking-widest rounded-[30px] overflow-hidden transition-all hover:scale-105 active:scale-95 shadow-[0_0_40px_rgba(99,102,241,0.5)]"
+                                    >
+                                        <span className="relative z-10 flex items-center justify-center gap-4">
+                                            Proceed to Lesson View <ChevronRight size={20} className="group-hover/btn:translate-x-2 transition-transform" />
+                                        </span>
+                                        <div className="absolute inset-0 bg-white/20 translate-y-full group-hover/btn:translate-y-0 transition-transform duration-300" />
+                                    </button>
+
+                                    <div className="flex items-center justify-center gap-6 opacity-40 grayscale group-hover:grayscale-0 transition-all">
+                                        <Sparkles size={20} className="text-secondary animate-pulse" />
+                                        <div className="h-px w-20 bg-white/10" />
+                                        <Activity size={20} className="text-primary" />
+                                    </div>
+                                </div>
+                            </motion.div>
                         </motion.div>
                     )}
                 </AnimatePresence>
