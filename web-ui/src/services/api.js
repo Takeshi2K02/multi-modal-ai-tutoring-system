@@ -163,3 +163,12 @@ export const getStudentProfile = async (studentId) => {
         return null;
     }
 };
+export const acceptShadowIntervention = async (shadowData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/user/accept_shadow`, shadowData);
+        return response.data;
+    } catch (error) {
+        console.error("Shadow Acceptance Error", error);
+        throw error;
+    }
+};

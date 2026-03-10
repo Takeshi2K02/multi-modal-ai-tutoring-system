@@ -3,6 +3,7 @@ import time
 from pymongo import MongoClient
 from datetime import datetime
 from dotenv import load_dotenv
+from agent_core.pedagogical_agent import PedagogicalAgent
 
 load_dotenv()
 
@@ -68,6 +69,33 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
         del log_entry["_id"]
     log_entry["timestamp"] = log_entry["timestamp"].isoformat()
     await _emit_event("cv_update", log_entry)
+    
+    # --- RL BRIDGE: Trigger Policy Inference on Heartbeat (Project ID: 25-26J-130) ---
+    try:
+        # 1. Fetch Student Profile for Context
+        profile = db.student_profiles.find_one({"student_id": user_id}) or {}
+        
+        # 2. Run Inference
+        agent = PedagogicalAgent(user_id)
+        distribution = agent.get_action_distribution(engagement_score, emotion, profile)
+        decision = agent.select_action(distribution)
+        
+        # 3. Emit Policy Update for Live Monitor
+        await _emit_event("policy_update", {
+            "user_id": user_id,
+            "distribution": distribution,
+            "selected_action": decision,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # 4. Reward Calculation Log
+        print(f"[RL Engine] --- Input Engagement: {engagement_score:.2f} | Selected Strategy: {decision['policy_name']} | Confidence: {int(decision['confidence']*100)}% ---")
+        
+        # 5. Persist the Strategy Decision
+        await push_rl_strategy(user_id, decision["action_id"], decision["confidence"], decision["reasoning"])
+        
+    except Exception as e:
+        print(f"RL Bridge Error: {e}")
 
 async def push_rl_strategy(user_id: str, action_id: int, confidence: float, reasoning: str = None):
     """

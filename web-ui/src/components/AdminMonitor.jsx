@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { motion } from 'framer-motion';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
@@ -19,6 +20,7 @@ const CV_BACKEND = "http://localhost:8000";
 const AdminMonitor = () => {
     const [cvData, setCvData] = useState([]);
     const [rlData, setRlData] = useState(null);
+    const [policyDistribution, setPolicyDistribution] = useState({});
     const [totSteps, setTotSteps] = useState([]);
     const [deviationAlert, setDeviationAlert] = useState(false);
     const [logs, setLogs] = useState([]);
@@ -58,11 +60,18 @@ const AdminMonitor = () => {
             setLogs((prev) => [{ type: 'ToT_FINAL', data }, ...prev.slice(0, 49)]);
         });
 
+        socket.on('policy_update', (data) => {
+            setPolicyDistribution(data.distribution);
+            setRlData(data.selected_action);
+            setLogs((prev) => [{ type: 'POLICY', data }, ...prev.slice(0, 49)]);
+        });
+
         return () => {
             socket.off('cv_update');
             socket.off('rl_update');
             socket.off('tot_step');
             socket.off('tot_final');
+            socket.off('policy_update');
         };
     }, []);
 
@@ -263,6 +272,37 @@ const AdminMonitor = () => {
                                             <p className="text-3xl font-mono font-light text-secondary">{(rlData.confidence * 100).toFixed(0)}%</p>
                                         </div>
                                     </div>
+
+                                    {/* Real-time Distribution Chart (Project ID: 25-26J-130) */}
+                                    <div className="pt-6 border-t border-edu-border-light dark:border-white/5">
+                                        <p className="text-[10px] text-zinc-500 dark:text-slate-500 uppercase font-bold tracking-[0.15em] mb-4">Action Distribution</p>
+                                        <div className="space-y-4">
+                                            {Object.entries(policyDistribution).map(([name, weight]) => (
+                                                <div key={name} className="space-y-1">
+                                                    <div className="flex justify-between text-[10px] uppercase tracking-tighter">
+                                                        <span className={cn(
+                                                            "transition-colors duration-500",
+                                                            name === rlData.policy_name ? "text-secondary font-black" : "text-zinc-400 dark:text-slate-600"
+                                                        )}>
+                                                            {name}
+                                                        </span>
+                                                        <span className="font-mono text-zinc-400">{(weight * 100).toFixed(0)}%</span>
+                                                    </div>
+                                                    <div className="h-1 rounded-full bg-zinc-100 dark:bg-white/5 overflow-hidden">
+                                                        <motion.div
+                                                            initial={{ width: 0 }}
+                                                            animate={{ width: `${weight * 100}%` }}
+                                                            transition={{ duration: 0.5, ease: "easeOut" }}
+                                                            className={cn(
+                                                                "h-full rounded-full transition-colors duration-500",
+                                                                name === rlData.policy_name ? "bg-secondary shadow-[0_0_10px_#00AFB9]" : "bg-primary/20"
+                                                            )}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                 </div>
                             ) : (
                                 <div className="flex flex-col items-center justify-center h-full text-slate-600 py-12">
@@ -339,7 +379,7 @@ const AdminMonitor = () => {
                                     <span className={cn(
                                         "shrink-0 px-2 py-0.5 rounded text-[8px] font-black tracking-widest",
                                         log.type === 'CV' ? "bg-primary/10 text-primary border border-primary/20" :
-                                            log.type === 'RL' ? "bg-secondary/10 text-secondary border border-secondary/20" : "bg-accent/10 text-accent border border-accent/20"
+                                            log.type === 'RL' || log.type === 'POLICY' ? "bg-secondary/10 text-secondary border border-secondary/20" : "bg-accent/10 text-accent border border-accent/20"
                                     )}>
                                         {log.type}
                                     </span>

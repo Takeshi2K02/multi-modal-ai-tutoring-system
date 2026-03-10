@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
-import clsx from 'clsx'; // Added clsx import
+import clsx from 'clsx';
 import {
     BrainCircuit,
     Sparkles,
@@ -14,19 +14,22 @@ import {
     ChevronRight,
     AlertCircle,
     ThumbsUp,
-    ThumbsDown
+    ThumbsDown,
+    Activity,
+    Target
 } from 'lucide-react';
 import DynamicVisualContainer from '../components/DynamicVisualContainer';
 import Mermaid from '../components/Mermaid';
 import {
-    runSimulation,
     savePerformance,
     updateSessionProgress,
     evaluateChallenge,
     saveLessonContent,
     getLessonContent,
     syncStudentProgress,
-    handleUserFeedback
+    handleUserFeedback,
+    acceptShadowIntervention,
+    runSimulation
 } from '../services/api';
 
 const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
@@ -91,8 +94,6 @@ const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
                             className="w-full py-5 bg-primary text-white font-black rounded-full shadow-xl shadow-primary/10 hover:scale-[1.02] active:scale-95 disabled:opacity-30 disabled:grayscale transition-all flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-xs"
                         >
                             {isEvaluating ? 'AI Processing...' : 'Submit for Evaluation'}
-                            {/* Assuming Send icon is imported or available */}
-                            {/* <Send size={16} /> */}
                         </button>
                     )}
                 </div>
@@ -164,7 +165,6 @@ class ErrorBoundary extends React.Component {
 }
 
 const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, correctIndex }) => {
-    // Robust Null-Checks for AI-generated data
     if (!quiz || !quiz.questions || !Array.isArray(quiz.questions)) {
         return (
             <div className="mt-8 p-6 bg-white/5 dark:bg-white/[0.02] rounded-3xl border border-white/5 flex items-center gap-3">
@@ -248,14 +248,14 @@ const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, corr
     );
 };
 
-const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added sio prop
+const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => {
     const [loading, setLoading] = useState(true);
     const [content, setContent] = useState(null);
     const [isThinking, setIsThinking] = useState(true);
     const [selectedOption, setSelectedOption] = useState(null);
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [isChallengeComplete, setIsChallengeComplete] = useState(false);
-    const [shadowReady, setShadowReady] = useState(null); // Project ID: 25-26J-130
+    const [shadowReady, setShadowReady] = useState(null);
     const [isCompleting, setIsCompleting] = useState(false);
     const [response, setResponse] = useState('');
     const [error, setError] = useState(null);
@@ -264,15 +264,13 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
     const [strategyLabel, setStrategyLabel] = useState(null);
     const [feedbackSent, setFeedbackSent] = useState(false);
     const [score, setScore] = useState(0);
-    const [signalData, setSignalData] = useState({ nodes: [], edges: [] }); // Renamed to avoid collision with AbortSignal
+    const [signalData, setSignalData] = useState({ nodes: [], edges: [] });
     const [currentModality, setCurrentModality] = useState('Synthesis');
     const [ragSources, setRagSources] = useState([]);
+    const [profileToast, setProfileToast] = useState(null);
 
-    // Project ID: 25-26J-130: Hydration Guard for Cognitive Path
     useEffect(() => {
         if (signalData?.nodes?.length > 0 && !isVisualReady) {
-            console.log(">>> [Hydration] Signal nodes detected, preparing visual flow...");
-            // Small delay to ensure Mermaid has context if needed
             const timer = setTimeout(() => setIsVisualReady(true), 800);
             return () => clearTimeout(timer);
         }
@@ -283,26 +281,22 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
             if (!topic) return;
             setLoading(true);
             setIsThinking(true);
-            setIsVisualReady(false); // Reset on new topic
+            setIsVisualReady(false);
             setSelectedOption(null);
             setIsSubmitted(false);
             setIsChallengeComplete(false);
-            setShadowReady(null); // Reset shadow on new lesson
+            setShadowReady(null);
             try {
                 const topicId = topic.id || topic.title;
-                // 0. Check for existing content
                 const existing = await getLessonContent("alex_123", topicId);
 
                 if (signal.aborted) return;
 
                 if (existing && (existing.content || existing.directive)) {
-                    console.log(">>> [Persistence] Loading saved lesson state");
                     const savedDirective = existing.directive || existing.content;
                     setContent(savedDirective);
                     setIsThinking(false);
-                    if (existing.user_response) {
-                        setResponse(existing.user_response); // For Challenge
-                    }
+                    if (existing.user_response) setResponse(existing.user_response);
                     if (existing.ai_evaluation_score !== undefined) {
                         setScore(existing.ai_evaluation_score);
                         if (existing.ai_evaluation_score >= 0.7) setIsChallengeComplete(true);
@@ -320,20 +314,16 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                 if (signal.aborted) return;
 
                 if (result.meta?.strategy === 'ERROR' || result.meta?.strategy === 'TIMED_OUT') {
-                    console.error(">>> [Synthesis Error]", result.meta?.error);
-                    setError(result.meta?.body_text || "System is re-calibrating. Please wait a moment or try again.");
+                    setError(result.meta?.body_text || "Re-calibrating. Please wait...");
                     setIsThinking(false);
                     return;
                 }
 
-                // Extract directive from the best path
                 const bestNodeId = result.meta?.best_path_ids?.[result.meta.best_path_ids.length - 1];
                 const bestNode = result.nodes?.find(n => n.id === bestNodeId);
-
-                // Content Payload Binding: Prioritize contextually rich content (Project ID: 25-26J-130)
                 const directive = bestNode?.data?.directive || {
                     type: "explanation",
-                    content: result.meta?.content?.full_text || result.meta?.body_text || result.meta?.final_response || "Concept synthesis complete."
+                    content: result.meta?.content?.full_text || result.meta?.body_text || result.meta?.final_response || "Complete."
                 };
 
                 setContent(directive);
@@ -342,24 +332,15 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                 setRagSources(result.meta?.rag_sources || []);
                 setCurrentModality(result.meta?.current_modality || (directive?.content?.includes('graph TD') ? 'VISUAL' : 'TEXTUAL'));
 
-                // ASYNC RENDER SYNCHRONIZATION
-                if (directive && (directive.content || directive.full_text)) {
-                    setTimeout(() => {
-                        if (signal.aborted) return;
-                        setIsThinking(false);
-                        onReady?.();
-                    }, 1500); // Visual effect
-                } else {
-                    console.error(">>> [Hydration] Synthesis returned empty content. Retrying...");
-                    setError("Synthesis yielded empty content. Please try again.");
+                setTimeout(() => {
+                    if (signal.aborted) return;
                     setIsThinking(false);
-                }
+                    onReady?.();
+                }, 1500);
 
             } catch (err) {
                 if (err.name === 'AbortError') return;
-                console.error(">>> [Lesson Init Error]", err);
-                const message = err.response?.data?.detail || err.message || "Unknown error";
-                setError(`Failed to initialize cognitive path: ${message}`);
+                setError(`Failed to initialize cognitive path: ${err.message}`);
             } finally {
                 if (!signal.aborted) setLoading(false);
             }
@@ -368,47 +349,64 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
         const controller = new AbortController();
         initializeLesson(controller.signal);
 
-        // Socket listeners for real-time updates
         if (sio) {
             sio.on('tot_final', (data) => {
                 console.log(">>> [ToT] Final Broadcast Recieved:", data);
-                // Assuming `lessonData` is equivalent to `content` in this component
                 setContent({
-                    type: "explanation", // Or infer type from data
+                    type: "explanation",
                     content: data.body_text || data.final_response || "Content updated."
                 });
                 setInteractionId(data.interaction_id);
                 setStrategyLabel(data.strategy);
-                setShadowReady(null); // Clear any pending shadows on new final content
+                setShadowReady(null);
             });
 
             sio.on('shadow_ready', (data) => {
                 console.log(">>> [Shadow ToT] Alternative Ready:", data);
                 setShadowReady(data);
             });
-        }
 
+            sio.on('profile_updated', (data) => {
+                console.log(">>> [Profile] Adaptation Confirmed:", data);
+                setProfileToast(data);
+                setTimeout(() => setProfileToast(null), 5000);
+            });
+        }
 
         return () => {
             controller.abort();
             if (sio) {
                 sio.off('tot_final');
                 sio.off('shadow_ready');
+                sio.off('profile_updated');
             }
         };
-    }, [topic.id || topic.title, sio]); // Added sio to dependencies
+    }, [topic.id || topic.title, sio]);
+
+    const handleAcceptShadow = async () => {
+        if (!shadowReady || !interactionId) return;
+        try {
+            await acceptShadowIntervention({
+                student_id: "alex_123",
+                interaction_id: interactionId,
+                modality_type: shadowReady.modality,
+                action_type: shadowReady.alternative_label,
+                topic_id: topic.id || topic.title
+            });
+            setContent({ content: shadowReady.shadow_content, type: "explanation" });
+            setShadowReady(null);
+        } catch (err) {
+            console.error("Shadow Accept Error:", err);
+        }
+    };
 
     const handleForceRegenerate = async () => {
         setIsThinking(true);
         setContent(null);
         setError(null);
-        setShadowReady(null); // Clear shadow on regeneration
-        // Delete cache entry and re-run sim
+        setShadowReady(null);
         try {
-            const topicId = topic.id || topic.title;
-            // We don't have a direct delete API, so we just overwrite with null and re-run
-            const scenario = `Teach me about ${topic.title}`;
-            const result = await runSimulation(scenario, topic);
+            const result = await runSimulation(`Teach me about ${topic.title}`, topic);
             const directive = result.nodes?.find(n => n.id === result.meta?.best_path_ids?.slice(-1)[0])?.data?.directive;
             setContent(directive);
             setIsThinking(false);
@@ -420,89 +418,42 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
     const hasDesignChallenge = useMemo(() => {
         const text = typeof content?.content === 'string' ? content.content : '';
         return text.includes('Design Challenge') || text.includes('### Challenge');
-    }, [content, topic?.id]);
+    }, [content]);
 
     const sanitizedContent = useMemo(() => {
         if (typeof content?.content !== 'string') return '';
         let text = content.content;
-
-        // Remove Mermaid tags from Markdown flow (handled by DynamicVisualContainer)
         text = text.replace(/\[MERMAID_START\][\s\S]*?\[MERMAID_END\]/mg, '');
-
-        // Handle [IMAGE_FOR_ALEX] - Convert to a visual hint or Mermaid-friendly block
-        // In a real scenario, this would call an 'image_generation' API.
-        // For now, we'll transform it into a specialized visual indicator.
         text = text.replace(/\[IMAGE_FOR_ALEX\]/g, '\n\n> [!TIP]\n> **Visual Context Generated**: An specialized architectural snapshot has been generated for your learning profile Alex.\n\n');
-
         return text.trim();
-    }, [content, topic?.id]);
+    }, [content]);
 
-    // Project ID: 25-26J-130: Mermaid Whitespace Stripper & Hidden Character Fix
     const mermaidData = useMemo(() => {
-        if (!sanitizedContent || !sanitizedContent.includes('[MERMAID_START]')) return null;
-        // Search original content to avoid stripped tags
-        const originalText = typeof content?.content === 'string' ? content.content : '';
-        const match = originalText.match(/\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]/);
+        if (!content?.content || !content.content.includes('[MERMAID_START]')) return null;
+        const match = content.content.match(/\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]/);
         if (match && match[1]) {
-            // Trim every line to remove hidden \r or non-breaking spaces
-            return match[1]
-                .split('\n')
-                .map(line => line.trim())
-                .filter(line => line.length > 0)
-                .join('\n');
+            return match[1].split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
         }
         return null;
-    }, [sanitizedContent, content?.content]);
+    }, [content]);
 
-    // Conditional Guard for empty content
     const isContentViewable = useMemo(() => {
         return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge || signalData?.nodes?.length > 0);
     }, [sanitizedContent, mermaidData, content, hasDesignChallenge, signalData?.nodes]);
 
     const isReadyToComplete = useMemo(() => {
         if (!isContentViewable) return false;
-        if (mermaidData && !isVisualReady) return false; // HydrationGuard
+        if (mermaidData && !isVisualReady) return false;
         if (content?.type === 'quiz') return isSubmitted;
         if (hasDesignChallenge) return isChallengeComplete;
         return true;
     }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady]);
 
-    const handleAcceptShadow = async () => {
-        if (!shadowReady) return;
-
-        console.log(">>> [Shadow ToT] Swapping active branch with shadow...");
-        // Update the main content with the shadow content
-        setContent({
-            type: "explanation", // Assuming shadow content is an explanation
-            content: shadowReady.shadow_content
-        });
-        setInteractionId(shadowReady.interaction_id);
-        setStrategyLabel(shadowReady.alternative_label);
-        setShadowReady(null); // Clear the shadow after acceptance
-
-        // Log intervention acceptance
-        try {
-            await handleUserFeedback({
-                student_id: "alex_123", // Assuming a fixed student ID for now
-                interaction_id: shadowReady.interaction_id,
-                action_type: 'intervention_accept',
-                sentiment: true, // Positive sentiment for accepting
-                modality_type: shadowReady.modality || 'TEXTUAL', // Use shadow's modality or default
-                topic_id: topic?.title // Use current topic title
-            });
-        } catch (err) {
-            console.error("Error logging shadow acceptance feedback:", err);
-        }
-    };
-
     const handleComplete = async () => {
         if (!sessionId || !topic || isCompleting) return;
         setIsCompleting(true);
         try {
-            // 1. Mark as completed
             await updateSessionProgress(sessionId, topic.title);
-
-            // 2. Sync full lesson state to MongoDB
             const finalPayload = {
                 student_id: "alex_123",
                 topic_id: topic.title,
@@ -512,8 +463,6 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
             };
             await saveLessonContent(finalPayload);
             await syncStudentProgress(finalPayload);
-
-            // 3. Save Performance if quiz was attempted
             if (content?.type === 'quiz' && isSubmitted) {
                 await savePerformance({
                     student_id: "alex_123",
@@ -524,8 +473,6 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                     correct_answers: selectedOption === content.quiz?.correct_index ? 1 : 0
                 });
             }
-
-            // 3. Navigate back
             onBack();
         } catch (err) {
             console.error("Completion Error:", err);
@@ -563,26 +510,11 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
     return (
         <div className="h-full w-full bg-edu-bg-light dark:bg-edu-bg-dark transition-colors overflow-y-auto custom-scrollbar">
             <div className="max-w-4xl mx-auto p-6 lg:p-12 min-h-full flex flex-col">
-
-                {/* Header */}
                 <header className="flex items-center justify-between mb-12">
-                    <button
-                        onClick={onBack}
-                        className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 dark:text-slate-500 hover:text-primary transition-colors"
-                    >
-                        <ArrowLeft size={14} />
-                        Exit Module
+                    <button onClick={onBack} className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 dark:text-slate-500 hover:text-primary transition-colors">
+                        <ArrowLeft size={14} /> Exit Module
                     </button>
                     <div className="flex items-center gap-4">
-                        {error && (
-                            <button
-                                onClick={handleForceRegenerate}
-                                className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-danger hover:opacity-80 transition-opacity"
-                            >
-                                <Sparkles size={14} />
-                                Force Regenerate
-                            </button>
-                        )}
                         <div className="flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-primary">Live Synthesis Active</span>
@@ -600,20 +532,11 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                             </div>
                         </div>
                     ) : (
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="space-y-12"
-                        >
+                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-12">
                             <div className="space-y-4">
-                                <h2 className="text-4xl lg:text-5xl font-light text-edu-text-light dark:text-white tracking-tight">
-                                    {topic?.title}
-                                </h2>
+                                <h2 className="text-4xl lg:text-5xl font-light text-edu-text-light dark:text-white tracking-tight">{topic?.title}</h2>
                                 <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 dark:text-slate-500 tracking-wide">
-                                    <span className="flex items-center gap-1.5">
-                                        <Gamepad2 size={14} />
-                                        {strategyLabel ? `${strategyLabel.replace(/_/g, ' ')}` : 'INTERACTIVE NODE'}
-                                    </span>
+                                    <span className="flex items-center gap-1.5"><Gamepad2 size={14} /> {strategyLabel?.replace(/_/g, ' ') || 'INTERACTIVE NODE'}</span>
                                     <span className="w-1 h-1 rounded-full bg-zinc-200 dark:bg-white/10" />
                                     <span className="flex items-center gap-1.5"><FileText size={14} /> {currentModality}</span>
                                 </div>
@@ -623,23 +546,16 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                                 <div className="text-xl font-light leading-relaxed text-zinc-600 dark:text-slate-300 transition-colors">
                                     <ReactMarkdown components={{
                                         code({ node, inline, className, children, ...props }) {
-                                            return (
-                                                <code className="bg-primary/20 text-white px-2 py-0.5 rounded text-sm font-mono border border-primary/30" {...props}>
-                                                    {children}
-                                                </code>
-                                            )
+                                            return <code className="bg-primary/20 text-white px-2 py-0.5 rounded text-sm font-mono border border-primary/30" {...props}>{children}</code>
                                         },
                                         p: ({ children }) => <p className="mb-6 leading-relaxed opacity-90">{children}</p>,
                                         h3: ({ children }) => <h3 className="text-2xl font-light text-primary mt-12 mb-6 tracking-tight">{children}</h3>,
                                         li: ({ children }) => <li className="mb-3 list-disc ml-6 opacity-80">{children}</li>,
                                         strong: ({ children }) => <strong className="font-bold text-white border-b border-primary/30">{children}</strong>
-                                    }}>
-                                        {sanitizedContent}
-                                    </ReactMarkdown>
+                                    }}>{sanitizedContent}</ReactMarkdown>
                                 </div>
                             </article>
 
-                            {/* ComponentFactory: Dynamic Hydration Layer */}
                             {mermaidData && (
                                 <div className="my-12 p-8 bg-[#121212]/50 rounded-[40px] border border-white/5 shadow-2xl overflow-hidden group transition-all hover:border-primary/20">
                                     <div className="flex items-center gap-3 mb-8">
@@ -653,7 +569,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                             )}
 
                             {hasDesignChallenge && (
-                                <ErrorBoundary onMountFailure={handleForceRegenerate}>
+                                <ErrorBoundary>
                                     <ChallengeComponent
                                         topic={topic?.title}
                                         context={content?.content}
@@ -668,7 +584,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                             )}
 
                             {content?.type === 'quiz' && (
-                                <ErrorBoundary onMountFailure={handleForceRegenerate}>
+                                <ErrorBoundary>
                                     <QuizComponent
                                         quiz={content.quiz}
                                         selectedOption={selectedOption}
@@ -680,76 +596,29 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                             )}
 
                             {content?.type === 'quiz' && !isSubmitted && selectedOption !== null && (
-                                <button
-                                    onClick={() => setIsSubmitted(true)}
-                                    className="w-full py-5 bg-primary text-white font-black rounded-full shadow-2xl shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-xs uppercase tracking-[0.3em]"
-                                >
-                                    Verify Knowledge knowledge
+                                <button onClick={() => setIsSubmitted(true)} className="w-full py-5 bg-primary text-white font-black rounded-full shadow-2xl shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-xs uppercase tracking-[0.3em]">
+                                    Verify Knowledge
                                 </button>
                             )}
 
                             <div className="pt-12 border-t border-edu-border-light dark:border-white/5 flex flex-col items-center gap-8">
-                                {/* Feedback Section (Project ID: 25-26J-130) */}
                                 <div className="flex flex-col items-center gap-4">
                                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">How was this explanation?</p>
                                     <div className="flex items-center gap-6">
-                                        <button
-                                            onClick={() => handleFeedback(true)}
-                                            disabled={feedbackSent}
-                                            className={clsx(
-                                                "p-4 rounded-full border transition-all hover:scale-110 active:scale-95",
-                                                feedbackSent === 'up' ? "bg-secondary/20 border-secondary text-secondary" : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50"
-                                            )}
-                                        >
-                                            <ThumbsUp size={20} />
-                                        </button>
-                                        <button
-                                            onClick={() => handleFeedback(false)}
-                                            disabled={feedbackSent}
-                                            className={clsx(
-                                                "p-4 rounded-full border transition-all hover:scale-110 active:scale-95",
-                                                feedbackSent === 'down' ? "bg-danger/20 border-danger text-danger" : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50"
-                                            )}
-                                        >
-                                            <ThumbsDown size={20} />
-                                        </button>
+                                        <button onClick={() => handleFeedback(true)} disabled={feedbackSent} className={clsx("p-4 rounded-full border transition-all hover:scale-110 active:scale-95", feedbackSent === 'up' ? "bg-secondary/20 border-secondary text-secondary" : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50")}><ThumbsUp size={20} /></button>
+                                        <button onClick={() => handleFeedback(false)} disabled={feedbackSent} className={clsx("p-4 rounded-full border transition-all hover:scale-110 active:scale-95", feedbackSent === 'down' ? "bg-danger/20 border-danger text-danger" : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50")}><ThumbsDown size={20} /></button>
                                     </div>
-                                    {feedbackSent && (
-                                        <motion.p
-                                            initial={{ opacity: 0 }}
-                                            animate={{ opacity: 1 }}
-                                            className="text-[10px] text-zinc-500 italic"
-                                        >
-                                            Thank you! Your feedback helps refine your learning path.
-                                        </motion.p>
-                                    )}
-                                </div>
-
-                                <div className="flex items-center gap-3 opacity-50">
-                                    <Database size={16} className="text-zinc-400" />
-                                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Persistent Cognition Layer Active</span>
                                 </div>
 
                                 <AnimatePresence>
                                     {isReadyToComplete && (
-                                        <motion.button
-                                            initial={{ opacity: 0, scale: 0.9 }}
-                                            animate={{ opacity: 1, scale: 1 }}
-                                            exit={{ opacity: 0, scale: 0.9 }}
-                                            onClick={handleComplete}
-                                            disabled={isCompleting}
-                                            className="group relative px-16 py-6 bg-secondary text-white font-black rounded-full shadow-2xl shadow-secondary/20 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 flex items-center gap-3 overflow-hidden"
-                                        >
-                                            <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-500" />
-                                            <span className="relative z-10 uppercase tracking-[0.3em] text-xs">
-                                                {isCompleting ? 'Synchronizing...' : 'Complete Module'}
-                                            </span>
+                                        <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={handleComplete} disabled={isCompleting} className="group relative px-16 py-6 bg-secondary text-white font-black rounded-full shadow-2xl shadow-secondary/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 overflow-hidden">
+                                            <span className="relative z-10 uppercase tracking-[0.3em] text-xs">{isCompleting ? 'Synchronizing...' : 'Complete Module'}</span>
                                             <CheckCircle2 size={18} className="relative z-10" />
                                         </motion.button>
                                     )}
                                 </AnimatePresence>
 
-                                {/* Project ID: 25-26J-130: Knowledge Sources Footer */}
                                 {ragSources?.length > 0 && (
                                     <div className="mt-12 w-full pt-12 border-t border-edu-border-light dark:border-white/5">
                                         <div className="flex flex-col gap-4">
@@ -759,9 +628,8 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                                             </div>
                                             <div className="flex flex-wrap gap-3">
                                                 {Array.from(new Set(ragSources)).map((src, idx) => (
-                                                    <div key={idx} className="px-4 py-2 bg-secondary/5 border border-secondary/10 rounded-full flex items-center gap-2 text-[10px] text-zinc-500 font-medium lowercase">
-                                                        <FileText size={12} className="opacity-50" />
-                                                        {src}
+                                                    <div key={idx} className="px-4 py-2 bg-secondary/5 border border-secondary/10 rounded-full flex items-center gap-2 text-[10px] text-zinc-500 font-medium">
+                                                        <FileText size={12} className="opacity-50" /> {src}
                                                     </div>
                                                 ))}
                                             </div>
@@ -773,43 +641,33 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio }) => { // Added si
                     )}
                 </main>
 
-                {/* Suggestion Toast Overlay (Project ID: 25-26J-130) */}
-                <AnimatePresence>
-                    {(shadowReady && !isThinking) && (
-                        <motion.div
-                            initial={{ opacity: 0, y: 50, scale: 0.9 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 20, scale: 0.9 }}
-                            className="fixed bottom-8 right-8 z-50 w-80 p-5 rounded-2xl bg-zinc-900 border border-secondary/30 backdrop-blur-xl shadow-2xl"
-                        >
-                            <div className="flex items-start gap-3">
-                                <div className="p-2 rounded-lg bg-secondary/20">
-                                    <Sparkles className="w-5 h-5 text-secondary" />
-                                </div>
-                                <div className="flex-1 text-left">
-                                    <h3 className="text-sm font-semibold text-white">Alternative Explanation Ready</h3>
-                                    <p className="text-[10px] text-zinc-400 mt-1 leading-relaxed">
-                                        I noticed you might be stuck. Would you like to try a <b>{shadowReady.alternative_label}</b> approach instead?
-                                    </p>
-                                    <div className="flex gap-2 mt-4">
-                                        <button
-                                            onClick={handleAcceptShadow}
-                                            className="flex-1 py-2 rounded-lg bg-secondary hover:bg-secondary/80 text-white text-[10px] font-black uppercase tracking-wider transition-colors"
-                                        >
-                                            Yes, Switch
-                                        </button>
-                                        <button
-                                            onClick={() => setShadowReady(null)}
-                                            className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 text-[10px] uppercase font-bold transition-colors"
-                                        >
-                                            Ignore
-                                        </button>
+                {/* Suggestions & Profile Adaptation Toasts */}
+                <div className="fixed bottom-12 right-12 z-[100] flex flex-col gap-4 items-end">
+                    <AnimatePresence>
+                        {shadowReady && !isThinking && (
+                            <motion.div initial={{ opacity: 0, y: 20, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.9 }} className="p-6 bg-zinc-900 border border-secondary/30 backdrop-blur-3xl rounded-[32px] shadow-2xl flex items-center justify-between gap-6 max-w-md">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 rounded-2xl bg-secondary/10 flex items-center justify-center text-secondary border border-secondary/20"><Sparkles size={24} /></div>
+                                    <div className="text-left">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-secondary">Alternative Path Ready</p>
+                                        <p className="text-sm font-light text-zinc-300">Switch to <strong>{shadowReady.alternative_label}</strong> for better engagement?</p>
                                     </div>
                                 </div>
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                                <button onClick={handleAcceptShadow} className="px-6 py-3 bg-secondary text-white text-[10px] font-black uppercase tracking-widest rounded-full hover:scale-105 active:scale-95 transition-all">Swap</button>
+                            </motion.div>
+                        )}
+
+                        {profileToast && (
+                            <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="p-6 bg-zinc-900/90 backdrop-blur-2xl rounded-3xl border border-white/10 shadow-3xl text-white flex items-center gap-4 min-w-[320px]">
+                                <div className="w-12 h-12 rounded-full bg-secondary/20 flex items-center justify-center border border-secondary/40"><BrainCircuit className="text-secondary" /></div>
+                                <div className="text-left">
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-secondary mb-1">Profile Adapted</p>
+                                    <p className="text-xs font-light text-zinc-400">Increased <strong>{profileToast.modality}</strong> weight by <strong>+{profileToast.delta}</strong></p>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </div>
             </div>
         </div>
     );
