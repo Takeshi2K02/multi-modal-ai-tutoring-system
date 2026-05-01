@@ -31,8 +31,10 @@ import {
     acceptShadowIntervention,
     runSimulation
 } from '../services/api';
+import { useAuth } from "../AuthContext";
 
 const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
+    const { userId } = useAuth();
     const [response, setResponse] = useState('');
     const [isEvaluating, setIsEvaluating] = useState(false);
     const [feedback, setFeedback] = useState(null);
@@ -43,7 +45,7 @@ const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
         setIsEvaluating(true);
         try {
             const result = await evaluateChallenge({
-                student_id: "alex_123",
+                student_id: userId,
                 session_id: sessionId,
                 topic_id: topic,
                 response: response,
@@ -249,6 +251,7 @@ const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, corr
 };
 
 const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedContent }) => {
+    const { userId } = useAuth();
     const [loading, setLoading] = useState(true);
     const [content, setContent] = useState(null);
     const [isThinking, setIsThinking] = useState(true);
@@ -268,6 +271,20 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
     const [currentModality, setCurrentModality] = useState('Synthesis');
     const [ragSources, setRagSources] = useState([]);
     const [profileToast, setProfileToast] = useState(null);
+    const [progressPhases, setProgressPhases] = useState([]);
+    const [elapsedSeconds, setElapsedSeconds] = useState(0);
+    const [isDeliveryComplete, setIsDeliveryComplete] = useState(false);
+
+    // Timer for loading feedback (Project ID: 25-26J-130)
+    useEffect(() => {
+        let interval;
+        if ((isThinking || loading) && !isDeliveryComplete) {
+            interval = setInterval(() => {
+                setElapsedSeconds(prev => prev + 1);
+            }, 1000);
+        }
+        return () => clearInterval(interval);
+    }, [isThinking, loading, isDeliveryComplete]);
 
     useEffect(() => {
         if (signalData?.nodes?.length > 0 && !isVisualReady) {
@@ -286,29 +303,44 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
             setIsSubmitted(false);
             setIsChallengeComplete(false);
             setShadowReady(null);
+            setIsDeliveryComplete(false);
+            setElapsedSeconds(0);
             try {
                 const topicId = topic.id || topic.title;
 
-                // Project ID: 25-26J-130: Phase 4 Direct Handoff
+                // Project ID: 25-26J-130: Phase 4 Direct Handoff (Optimized)
                 if (preGeneratedContent) {
                     console.log(">>> [LessonView] Initializing with Pre-Generated Content:", preGeneratedContent);
-                    const directive = {
-                        type: preGeneratedContent.current_modality === 'VISUAL' ? 'visual_explanation' : 'explanation',
-                        content: preGeneratedContent.final_content
-                    };
-                    setContent(directive);
-                    setInteractionId(preGeneratedContent.interaction_id);
-                    setStrategyLabel(preGeneratedContent.strategy);
-                    setRagSources(preGeneratedContent.rag_sources || []);
-                    setCurrentModality(preGeneratedContent.current_modality || 'TEXTUAL');
+                    
+                    // Correcting payload parsing: GraphResponse.meta.content.full_text (Issue Fix)
+                    const finalContent = preGeneratedContent.final_content || 
+                                       preGeneratedContent.meta?.content?.full_text || 
+                                       preGeneratedContent.meta?.body_text;
+                    
+                    const modality = preGeneratedContent.current_modality || 
+                                   (finalContent?.includes('[MERMAID_START]') ? 'VISUAL' : 'TEXTUAL');
 
-                    setIsThinking(false);
-                    setLoading(false);
-                    onReady?.();
-                    return;
+                    const directive = {
+                        type: modality === 'VISUAL' ? 'visual_explanation' : 'explanation',
+                        content: finalContent
+                    };
+                    
+                    if (finalContent) {
+                        setContent(directive);
+                        setInteractionId(preGeneratedContent.interaction_id || preGeneratedContent.meta?.interaction_id);
+                        setStrategyLabel(preGeneratedContent.strategy || preGeneratedContent.meta?.strategy);
+                        setRagSources(preGeneratedContent.rag_sources || preGeneratedContent.meta?.context_data?.rag_sources || []);
+                        setCurrentModality(modality);
+
+                        setIsThinking(false);
+                        setLoading(false);
+                        onReady?.();
+                        return;
+                    }
+                    console.warn(">>> [LessonView] Pre-generated content was empty or invalid. Falling back to fetch/gen.");
                 }
 
-                const existing = await getLessonContent("alex_123", topicId);
+                const existing = await getLessonContent(userId, topicId);
 
                 if (signal.aborted) return;
 
@@ -327,7 +359,23 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                 }
 
                 const scenario = `Teach me about ${topic.title}`;
-                const result = await runSimulation(scenario, topic);
+
+                // Debug: confirm session_id before firing
+                console.log('[LessonView] Firing runSimulation with session_id:', sessionId);
+                if (!sessionId) {
+                    setError('No active session found. Please go back and start your learning path again.');
+                    setIsThinking(false);
+                    return;
+                }
+
+                const result = await runSimulation(scenario, topic, null, null, sessionId);
+
+                // Handle structured error (Issue 3)
+                if (result.error) {
+                    setError(result.message || result.error);
+                    setIsThinking(false);
+                    return;
+                }
 
                 if (result.nodes) setSignalData({ nodes: result.nodes, edges: result.edges || [] });
 
@@ -370,20 +418,44 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
         initializeLesson(controller.signal);
 
         if (sio) {
+            const handleConnect = () => {
+                if (userId) {
+                    sio.emit("join_room", { student_id: userId });
+                }
+            };
+
+            sio.on("connect", handleConnect);
+
+            if (sio.connected && userId) {
+                sio.emit("join_room", { student_id: userId });
+            }
+
             sio.on('tot_final', (data) => {
                 console.log(">>> [ToT] Final Broadcast Recieved:", data);
                 setContent({
-                    type: "explanation",
-                    content: data.body_text || data.final_response || "Content updated."
+                    content: data.full_text || "Content updated.",
+                    type: data.current_modality || "explanation"
                 });
-                setInteractionId(data.interaction_id);
-                setStrategyLabel(data.strategy);
+                if (data.interaction_id) setInteractionId(data.interaction_id);
+                if (data.strategy) setStrategyLabel(data.strategy);
                 setShadowReady(null);
             });
 
             sio.on('shadow_ready', (data) => {
                 console.log(">>> [Shadow ToT] Alternative Ready:", data);
                 setShadowReady(data);
+                if (data.interaction_id) setInteractionId(data.interaction_id);
+            });
+
+            sio.on('synthesis_complete', (data) => {
+                if (data.full_text) {
+                    setContent({
+                        content: data.full_text,
+                        type: data.current_modality || "explanation"
+                    });
+                }
+                if (data.interaction_id) setInteractionId(data.interaction_id);
+                setIsThinking(false);
             });
 
             sio.on('profile_updated', (data) => {
@@ -391,29 +463,47 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                 setProfileToast(data);
                 setTimeout(() => setProfileToast(null), 5000);
             });
+
+            sio.on('progress', (data) => {
+                console.log(">>> [Synthesis Progress]:", data);
+                if (data.phase === 'delivery_complete') {
+                    setIsDeliveryComplete(true);
+                    if (data.elapsed_ms) {
+                        setElapsedSeconds(Math.floor(data.elapsed_ms / 1000));
+                    }
+                }
+                setProgressPhases(prev => {
+                    if (prev.find(p => p.phase === data.phase)) return prev;
+                    return [...prev, data];
+                });
+            });
+
+            return () => {
+                controller.abort();
+                sio.off("connect", handleConnect);
+                sio.off('tot_final');
+                sio.off('shadow_ready');
+                sio.off('synthesis_complete');
+                sio.off('profile_updated');
+            };
         }
 
         return () => {
             controller.abort();
-            if (sio) {
-                sio.off('tot_final');
-                sio.off('shadow_ready');
-                sio.off('profile_updated');
-            }
         };
-    }, [topic.id || topic.title, sio]);
+    }, [topic.id || topic.title, sio, userId]);
 
     const handleAcceptShadow = async () => {
         if (!shadowReady || !interactionId) return;
         try {
             await acceptShadowIntervention({
-                student_id: "alex_123",
+                student_id: userId,
                 interaction_id: interactionId,
-                modality_type: shadowReady.modality,
+                modality_type: shadowReady.current_modality,
                 action_type: shadowReady.alternative_label,
                 topic_id: topic.id || topic.title
             });
-            setContent({ content: shadowReady.shadow_content, type: "explanation" });
+            setContent({ content: shadowReady.full_text, type: shadowReady.current_modality || "explanation" });
             setShadowReady(null);
         } catch (err) {
             console.error("Shadow Accept Error:", err);
@@ -444,7 +534,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
         if (typeof content?.content !== 'string') return '';
         let text = content.content;
         text = text.replace(/\[MERMAID_START\][\s\S]*?\[MERMAID_END\]/mg, '');
-        text = text.replace(/\[IMAGE_FOR_ALEX\]/g, '\n\n> [!TIP]\n> **Visual Context Generated**: An specialized architectural snapshot has been generated for your learning profile Alex.\n\n');
+        text = text.replace(/\[IMAGE_FOR_ALEX\]/g, '\n\n> [!TIP]\n> **Visual Context Generated**: An specialized architectural snapshot has been generated for your learning profile.\n\n');
         return text.trim();
     }, [content]);
 
@@ -475,7 +565,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
         try {
             await updateSessionProgress(sessionId, topic.title);
             const finalPayload = {
-                student_id: "alex_123",
+                student_id: userId,
                 topic_id: topic.title,
                 content: content,
                 user_response: response,
@@ -485,7 +575,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
             await syncStudentProgress(finalPayload);
             if (content?.type === 'quiz' && isSubmitted) {
                 await savePerformance({
-                    student_id: "alex_123",
+                    student_id: userId,
                     session_id: sessionId,
                     topic_id: topic.title,
                     score: selectedOption === content.quiz?.correct_index ? 100 : 0,
@@ -507,7 +597,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
         try {
             const modality = (content?.type === 'visual_explanation' || sanitizedContent.includes('graph TD')) ? 'visual' : 'textual';
             await handleUserFeedback({
-                student_id: "alex_123",
+                student_id: userId,
                 interaction_id: interactionId,
                 action_type: strategyLabel || "SIMPLIFY_EXPLANATION",
                 sentiment: sentiment,
@@ -543,12 +633,86 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                 </header>
 
                 <main className="flex-1 space-y-12 pb-24">
-                    {isThinking ? (
-                        <div className="h-[60vh] flex flex-col items-center justify-center gap-8 bg-white/40 dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[40px] backdrop-blur-3xl shadow-sm transition-all">
-                            <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-                            <div className="space-y-2 text-center">
-                                <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-primary animate-pulse">Orchestrating Knowledge Path</h3>
-                                <p className="text-zinc-400 dark:text-slate-500 text-xs font-light tracking-wide">Synthesizing {topic?.title}...</p>
+                    {(isThinking || !isContentViewable) ? (
+                        <div className="h-[70vh] flex flex-col items-center justify-center p-8 bg-white/40 dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[48px] backdrop-blur-3xl shadow-sm transition-all overflow-hidden relative">
+                            {/* Animated Background Mesh */}
+                            <div className="absolute inset-0 opacity-10 pointer-events-none">
+                                <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-primary rounded-full filter blur-[120px] animate-pulse" />
+                                <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-secondary rounded-full filter blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
+                            </div>
+
+                            <div className="relative z-10 w-full max-w-md flex flex-col items-center gap-12">
+                                {/* Large Central Spinner */}
+                                <div className="relative">
+                                    <div className="w-24 h-24 border-[3px] border-primary/10 border-t-primary rounded-full animate-spin" />
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <BrainCircuit size={32} className="text-primary animate-pulse" />
+                                    </div>
+                                    <div className="absolute -bottom-2 -right-2 bg-zinc-900 border border-white/10 px-3 py-1 rounded-full shadow-xl">
+                                        <span className="text-[10px] font-mono text-zinc-400">{elapsedSeconds}s</span>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-8 w-full">
+                                    <div className="text-center space-y-2">
+                                        <h3 className="text-sm font-black uppercase tracking-[0.3em] text-primary">Synthesizing Module</h3>
+                                        <div className="text-zinc-500 dark:text-slate-500 text-xs font-light flex justify-center gap-1">
+                                            Crafting a personalized cognitive path for 
+                                            <ReactMarkdown 
+                                                components={{
+                                                    p: ({children}) => <span className="font-bold text-zinc-400">{children}</span>,
+                                                    strong: ({children}) => <span className="font-bold text-zinc-400">{children}</span>
+                                                }}
+                                            >
+                                                {`**${topic?.title}**`}
+                                            </ReactMarkdown>
+                                        </div>
+                                    </div>
+
+                                    {/* Progress Steps */}
+                                    <div className="space-y-4">
+                                        {[
+                                            { id: 'rag_complete', label: 'Knowledge Retrieval', msg: 'Searching vector database...' },
+                                            { id: 'tot_complete', label: 'Strategy Selection', msg: 'Identifying optimal teaching path...' },
+                                            { id: 'synthesis_complete', label: 'Lesson Synthesis', msg: 'Expanding reasoning into content...' }
+                                        ].map((phase, idx) => {
+                                            const isDone = progressPhases.some(p => p.phase === phase.id);
+                                            const isCurrent = !isDone && (idx === 0 || progressPhases.some(p => p.phase === ['rag_complete', 'tot_complete'][idx-1]));
+                                            
+                                            return (
+                                                <div key={phase.id} className={clsx(
+                                                    "flex items-center gap-4 p-4 rounded-3xl border transition-all duration-500",
+                                                    isDone ? "bg-secondary/10 border-secondary/20 opacity-100" : 
+                                                    isCurrent ? "bg-primary/5 border-primary/20 opacity-100 scale-[1.02] shadow-lg" : 
+                                                    "bg-white/5 border-transparent opacity-30"
+                                                )}>
+                                                    <div className={clsx(
+                                                        "w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold transition-all",
+                                                        isDone ? "bg-secondary text-white" : isCurrent ? "bg-primary text-white animate-pulse" : "bg-zinc-800 text-zinc-500"
+                                                    )}>
+                                                        {isDone ? <CheckCircle2 size={16} /> : idx + 1}
+                                                    </div>
+                                                    <div className="flex-1">
+                                                        <p className={clsx("text-xs font-bold", isDone ? "text-secondary" : isCurrent ? "text-primary" : "text-zinc-500")}>{phase.label}</p>
+                                                        <p className="text-[10px] text-zinc-500 font-light truncate">
+                                                            {isDone ? "Completed" : isCurrent ? phase.msg : "Waiting..."}
+                                                        </p>
+                                                    </div>
+                                                    {isDone && (
+                                                        <span className="text-[10px] font-mono text-secondary/60">
+                                                            {((progressPhases.find(p => p.phase === phase.id)?.elapsed_ms || 0) / 1000).toFixed(1)}s
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-zinc-600 animate-pulse">
+                                    <Sparkles size={10} />
+                                    <span>AI Orchestration in Progress</span>
+                                </div>
                             </div>
                         </div>
                     ) : (

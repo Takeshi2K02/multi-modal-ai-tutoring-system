@@ -1,0 +1,202 @@
+CV AND RL ENGINE FILE SUMMARY
+==============================
+Project ID: 25-26J-130
+Generated: 2026-04-23
+
+
+============================
+CV MODULE  (cv/backend/)
+============================
+
+--- cv/backend/app.py ---
+Purpose: Flask application factory for the EduSynth CV backend. Initialises
+         extensions (JWT, CORS, Bcrypt), connects to MongoDB, and registers
+         route blueprints under /api/*.
+Inputs:  config_name (str) — environment name, e.g. "development"
+Outputs: Flask app instance
+Status:  Real implementation
+
+--- cv/backend/config.py ---
+Purpose: Holds environment-specific configuration classes (Development,
+         Production, Testing) loaded from a .env file.
+Inputs:  Environment variables — SECRET_KEY, JWT_SECRET_KEY, MONGO_URI,
+         OPENAI_API_KEY, etc.
+Outputs: Config dict keyed by environment name
+Status:  Real implementation
+
+--- cv/backend/models.py ---
+Purpose: Defines MongoDB data models and CRUD helpers for User, LearningQuery,
+         Material, MaterialAccess, and EngagementLog collections.
+Inputs:  Flask app instance (for init_db); field values for each create call
+Outputs: MongoDB documents as Python dicts; aggregated stats for EngagementLog
+Status:  Real implementation
+
+--- cv/backend/init_db_mongo.py ---
+Purpose: One-time seed script that clears existing data and inserts sample
+         users and learning materials into MongoDB.
+Inputs:  None (reads config from Flask app context)
+Outputs: Prints confirmation; populates the database
+Status:  Real implementation (seed/utility script)
+
+--- cv/backend/routes/engagement.py ---
+Purpose: REST endpoints for receiving webcam frames, running ML inference,
+         persisting engagement logs, and serving log/summary queries.
+Inputs:  POST /track — JSON body with frame_data (base64 str), optional
+         screen_data (base64 str), user_id (str), material_id (str)
+         GET  /logs  — JWT; optional material_id, limit query params
+         GET  /summary — JWT
+Outputs: JSON engagement record or summary dict; HTTP 200/400/500
+Status:  Real implementation
+
+--- cv/backend/routes/analytics.py ---
+Purpose: REST endpoints for student analytics: dashboard, confidence report,
+         and learning-path timeline.
+Inputs:  JWT token; optional query params (days, material_id)
+Outputs: JSON dicts with engagement metrics, emotion distributions,
+         confidence scores, and learning path data
+Status:  Real implementation
+
+--- cv/backend/services/ml_models.py ---
+Purpose: Core CV inference classes. EngagementModel combines a ViT emotion
+         classifier (fine-tuned or HuggingFace fallback), MediaPipe
+         FaceLandmarker (gaze + eye closure), and PoseLandmarker (posture).
+         ContentModel uses zero-shot BART to detect the topic of OCR text.
+Inputs:  EngagementModel.predict() — BGR numpy frame (np.ndarray)
+         ContentModel.predict()    — OCR text string
+Outputs: EngagementModel: dict with emotion, emotion_confidence, gaze,
+         posture, eye_state
+         ContentModel: topic string (e.g. "mathematics")
+Status:  Real implementation (models loaded from disk or HuggingFace Hub)
+
+--- cv/backend/services/engagement_service.py ---
+Purpose: Orchestrates one tracking cycle: decodes a base64 webcam frame,
+         calls EngagementModel, optionally runs EasyOCR on a screen capture,
+         calculates a weighted engagement score, applies a 3-frame stability
+         buffer, and returns a flat result dict.
+Inputs:  frame_data (base64 str), screen_data (base64 str, optional),
+         material_id (str, optional)
+Outputs: dict — emotion, emotion_conf, engagement_score, engagement_state,
+         gaze, posture, ocr_excerpt, context_match, engagement_context_state
+Status:  Real implementation
+
+--- cv/backend/services/content_service.py ---
+Purpose: Singleton service using OpenCLIP (ViT-B-32, laion2b weights) to
+         classify a screen-capture image into a subject (e.g. Mathematics)
+         and content type (e.g. Quiz) via cosine similarity.
+Inputs:  detect(image_b64: str) — base64-encoded JPEG/PNG screenshot
+Outputs: dict — subject, content_type, subject_confidence,
+         content_type_confidence
+Status:  Real implementation
+
+--- cv/backend/services/openai_service.py ---
+Purpose: Calls GPT-4 to generate five diverse learning-material suggestions
+         (with real URLs) for a given student query; falls back to search-
+         URL suggestions on API error.
+Inputs:  query_text (str)
+Outputs: list of dicts — type, title, description, url, topic
+Status:  Real implementation (requires OPENAI_API_KEY)
+
+--- cv/datasets/download_datasets.py ---
+Purpose: Interactive script to download and extract training datasets
+         (FER2013 via Kaggle, COCO images/annotations) and create the
+         expected directory structure.
+Inputs:  User menu choice (1-5) at stdin; Kaggle credentials in ~/.kaggle/
+Outputs: Downloaded archives + extracted directories under cv/datasets/raw/
+Status:  Real implementation (utility/setup script)
+
+
+============================
+RL ENGINE  (rl_engine/)
+============================
+
+--- rl_engine/src/env/tutor_env.py ---
+Purpose: Gymnasium environment modelling an adaptive tutoring session. Holds
+         a 14-dimensional student state, a 9-action discrete action space,
+         a reward function combining engagement + accuracy + confidence, and
+         a sync_with_db method to pull live CV/performance data from MongoDB.
+Inputs:  reset(student_id: str) — student profile ID from JSON file
+         step(action: int) — one of 9 pedagogical actions (0-8)
+         sync_with_db(user_id: str) — MongoDB connection string via env var
+Outputs: observation (np.ndarray shape (14,)), reward (float), terminated
+         (bool), info (dict)
+Status:  Real implementation
+
+--- rl_engine/src/env/student_sim.py ---
+Purpose: Rule-based student simulator used during training. Applies fixed
+         delta effects (attention, accuracy, confusion, boredom) per action
+         with small Gaussian noise. Also contains helper samplers for CV and
+         agentic state.
+Inputs:  simulate_student(state: dict, action: int)
+Outputs: dict — attention, recent_acc, time_on_task, confusion, boredom
+Status:  Real implementation
+
+--- rl_engine/src/engine/rl_engine.py ---
+Purpose: Thin wrapper around a Stable-Baselines3 PPO model. Loads a saved
+         checkpoint and exposes a decide() method.
+Inputs:  model_path (str), env (VecEnv); observation (np.ndarray) at runtime
+Outputs: dict — action_id (int), confidence (float, always 1.0),
+         timestamp (float)
+Status:  Real implementation (confidence is a placeholder constant, not
+         a true probabilistic estimate)
+
+--- rl_engine/src/utils/state_adapter.py ---
+Purpose: Converts raw CV module output into a flat numeric state dict ready
+         for the RL environment.
+Inputs:  cv_output (dict) — engagement_score, emotion, gaze; history (dict,
+         optional) — recent_acc, time_on_task
+Outputs: dict — attention, confusion, boredom, difficulty, recent_acc,
+         time_on_task
+Status:  Partial implementation — difficulty is hardcoded to 0.5; intended
+         to be filled by the Agentic core
+
+--- rl_engine/src/utils/logger.py ---
+Purpose: Appends a JSON-serialised decision packet to a .jsonl log file.
+Inputs:  packet (dict), path (str, default "logs/rl_decisions.jsonl")
+Outputs: Writes a line to the log file
+Status:  Real implementation
+
+--- rl_engine/src/train/train_dqn.py ---
+Purpose: Trains a DQN agent on TutorEnv for 50 000 timesteps, cycling
+         through random student IDs each episode, then saves the model.
+Inputs:  None (reads student profiles from data/student_profiles.json)
+Outputs: models/dqn_model.zip saved to disk
+Status:  Real implementation (training script)
+
+--- rl_engine/src/train/train_ppo.py ---
+Purpose: Trains a PPO agent on TutorEnv for 100 000 timesteps with the
+         same random-student wrapper, then saves the model.
+Inputs:  None (reads student profiles from data/student_profiles.json)
+Outputs: models/refined_pedagogical_policy.zip saved to disk
+Status:  Real implementation (training script)
+
+--- rl_engine/main.py ---
+Purpose: Live inference loop that syncs state from MongoDB every 3 seconds,
+         queries the DQN model for a pedagogical action, logs the decision,
+         and broadcasts telemetry to the Agentic AI Core via HTTP POST.
+Inputs:  student_id (hardcoded "alex_123"), MongoDB URI, saved DQN model
+Outputs: Appends to logs/rl_decisions.jsonl; POST to localhost:8000/api/telemetry/rl
+Status:  Real implementation (student_id is hardcoded; telemetry failures
+         are silently swallowed)
+
+--- rl_engine/evaluates.py ---
+Purpose: Evaluation script that runs 5 episodes with the saved DQN model,
+         logs each step to a .jsonl file, and plots per-episode observation
+         and reward curves with matplotlib.
+Inputs:  models/dqn_model.zip; TutorEnv
+Outputs: logs/rl_decisions.jsonl; matplotlib plots (displayed inline)
+Status:  Real implementation (evaluation/analysis script)
+
+--- rl_engine/evaluates_per_student.py ---
+Purpose: Evaluates the DQN model separately for each of the 5 predefined
+         student profiles, printing step-by-step state and total reward per
+         student.
+Inputs:  models/dqn_model.zip; student_ids list ["S1".."S5"]
+Outputs: Console output — per-step state and total reward per student
+Status:  Real implementation (evaluation/analysis script)
+
+--- rl_engine/app.py ---
+Purpose: Streamlit dashboard that reads the last entry from the RL decisions
+         log and displays the learner state and the selected teaching strategy.
+Inputs:  logs/rl_decisions.jsonl (read from disk)
+Outputs: Browser-based Streamlit UI showing RL decisions
+Status:  Real implementation (prototype UI; learner data noted as simulated)

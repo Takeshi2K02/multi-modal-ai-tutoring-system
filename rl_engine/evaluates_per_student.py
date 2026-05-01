@@ -1,13 +1,13 @@
 import time
 from src.env.tutor_env import TutorEnv
-from stable_baselines3 import DQN
+from stable_baselines3 import PPO
 
 STUDENTS = ["S1", "S2", "S3", "S4", "S5"]
 
 # -----------------------------
 # Load personalized RL model
 # -----------------------------
-model = DQN.load("models/dqn_model")
+model = PPO.load("models/ppo_model")
 
 # -----------------------------
 # Evaluate each student separately

@@ -1,0 +1,94 @@
+1. LANGGRAPH SETUP
+   - What is the exact LangGraph version used?
+     langgraph==1.1.9
+   - List all graph nodes defined (exact names).
+     retrieve_context, expand_frontier, evaluate_frontier, prune_frontier, background_synthesis, finalize_output
+   - List all edges and conditional edges (from -> to).
+     Edges:
+     retrieve_context -> expand_frontier
+     expand_frontier -> evaluate_frontier
+     evaluate_frontier -> prune_frontier
+     background_synthesis -> END
+     finalize_output -> END
+     Conditional Edges:
+     prune_frontier -> check_stop_condition ({ "expand": "expand_frontier", "finalize": "finalize_output", "shadow": "background_synthesis" })
+   - What is the entry point node and exit/end node?
+     Entry Point: retrieve_context
+     Exit/End Node: END
+
+2. STATE SCHEMA
+   - What fields are in the LangGraph state schema?
+     student_id, user_query, profile, context_data, teaching_strategy, student_preferences, strategy_blacklist, frontier, tree_memory, best_node, final_response, body_text, visual_tags, reasoning_trace, build_time, stop_early, selected_strategy_label, interaction_outcome, interaction_id, shadow_frontier, is_completed, estimated_reading_time, handoff_buffer, synthesis_locked, full_text, current_modality
+   - What are their data types?
+     student_id: str
+     user_query: str
+     profile: Optional[Dict]
+     context_data: Optional[Dict]
+     teaching_strategy: Optional[Dict]
+     student_preferences: Dict[str, float]
+     strategy_blacklist: List[str]
+     frontier: List[ThoughtNode]
+     tree_memory: Dict[str, ThoughtNode]
+     best_node: Optional[ThoughtNode]
+     final_response: Optional[str]
+     body_text: Optional[str]
+     visual_tags: List[str]
+     reasoning_trace: List[str]
+     build_time: float
+     stop_early: bool
+     selected_strategy_label: Optional[str]
+     interaction_outcome: Optional[str]
+     interaction_id: Optional[str]
+     shadow_frontier: List[ThoughtNode]
+     is_completed: bool
+     estimated_reading_time: int
+     handoff_buffer: List[Dict[str, Any]]
+     synthesis_locked: bool
+     full_text: Optional[str]
+     current_modality: Optional[str]
+
+3. TREE OF THOUGHT (ToT)
+   - How many branches are generated per reasoning step?
+     3 (defined by branching_factor in CONFIG)
+   - What heuristic pruning logic is applied before LLM scoring?
+     Rule 1: Skip quiz if quiz_tolerance < 0.3 and engagement > 0.2.
+     Rule 2: Skip heavy video/external content if visual_preference < 0.25.
+   - Is asyncio.gather() used for parallel evaluation? (yes/no)
+     yes (used in expand_frontier and evaluate_frontier)
+   - What is the scoring criteria for branch selection?
+     1. Empathy Score (Multiplier if deviation_alert is True)
+     2. Alignment with RL Strategy
+     3. Multi-modal Effectiveness for Trend
+     Tie-breaker: Student preferred_modality weight alignment.
+
+4. REACT CYCLE
+   - How many reasoning steps maximum per ReAct loop?
+     2 (defined by max_depth=2 in CONFIG)
+   - What actions are available to the ReAct agent?
+     Maintain Current Content, Simplify Explanation, Provide Worked Example, Generate Practice Question, Switch Learning Mode, Suggest Break, Increase Challenge, Review Prerequisite, Prompt Reflection.
+
+5. MEMORY
+   - What is the memory buffer size (number of interactions)?
+     5
+   - What fields are stored per memory record?
+     _id, student_id, query, strategy, branch_id, path_score, engagement_score, outcome, trace, high_confidence, rag_sources, estimated_reading_time, is_completed, timestamp.
+
+6. JSON CONTRACTS
+   - What is the exact JSON structure received from the RL Engine?
+     { "engagement_trend": str, "current_affect": dict, "rl_strategy": str, "performance_summary": str, "deviation_alert": bool, "mastery_level": float, "session_fatigue": float, "confidence": float, "action_id": int, "intervention_needed": bool }
+   - What is the exact JSON structure sent to the RAG module?
+     { "query": str, "top_k": int, "filter": { "collection_id": str } }
+
+7. API
+   - What framework is used for the API endpoint?
+     FastAPI
+   - What is the endpoint route and HTTP method?
+     /api/run_sim (POST)
+   - Is the endpoint async?
+     yes
+
+8. LLM
+   - Which LLM model is used for reasoning?
+     gemini-2.5-flash (Vertex AI)
+   - How is it called (library/SDK name)?
+     langchain-google-genai or langchain-google-vertexai

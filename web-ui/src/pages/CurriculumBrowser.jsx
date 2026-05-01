@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import useSWR from 'swr';
-import { fetcher, API_BASE_URL } from '../services/api';
+import { fetcher, API_BASE_URL, startSessionTopic } from '../services/api';
 import {
     ChevronDown,
     ChevronRight,
@@ -12,9 +12,11 @@ import {
     Target,
     Award,
     Clock,
-    ArrowLeft
+    ArrowLeft,
+    Loader2
 } from 'lucide-react';
 import SkeletonTopic from '../components/Skeletons/SkeletonTopic';
+import { toast } from 'react-hot-toast';
 
 const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
     const { data: sessionData, error, isLoading } = useSWR(
@@ -24,12 +26,78 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
     );
 
     const [expandedLectures, setExpandedLectures] = useState({});
+    const [isStarting, setIsStarting] = useState(false);
 
     const toggleLecture = (index) => {
         setExpandedLectures(prev => ({
             ...prev,
             [index]: !prev[index]
         }));
+    };
+
+    const handleStartLearning = async () => {
+        setIsStarting(true);
+        console.log(">>> [UI] Start Learning clicked. Finding next topic...");
+        
+        let targetTopic = null;
+        for (const lecture of structure) {
+            // Priority 1: Check children for uncompleted topics
+            if (lecture.children && lecture.children.length > 0) {
+                for (const topic of lecture.children) {
+                    if (!completedTopics.includes(topic.title)) {
+                        targetTopic = {
+                            ...topic,
+                            collectionId: plan?.system_metadata?.collection_id
+                        };
+                        break;
+                    }
+                }
+            } 
+            
+            // Priority 2: Fallback to the lecture itself if it's uncompleted and has no children (Project ID: 25-26J-130)
+            if (!targetTopic && !completedTopics.includes(lecture.title)) {
+                targetTopic = {
+                    ...lecture,
+                    collectionId: plan?.system_metadata?.collection_id
+                };
+            }
+
+            if (targetTopic) break;
+        }
+
+        // Fallback for edge cases (Empty completedTopics or first run)
+        if (!targetTopic && structure.length > 0) {
+            const first = structure[0];
+            targetTopic = {
+                ...(first.children?.[0] || first),
+                collectionId: plan?.system_metadata?.collection_id
+            };
+        }
+
+        if (!targetTopic) {
+            toast.error("No topics found in curriculum.");
+            setIsStarting(false);
+            return;
+        }
+
+        try {
+            console.log(`>>> [UI] Starting topic: ${targetTopic.title}`);
+            const toastId = toast.loading(`Preparing lesson: ${targetTopic.title}...`);
+            
+            const result = await startSessionTopic(
+                sessionId, 
+                targetTopic.title, 
+                targetTopic.collectionId
+            );
+
+            toast.success("Cognitive path ready!", { id: toastId });
+            onContinue(targetTopic, result);
+        } catch (err) {
+            console.error(">>> [UI] Failed to start session:", err);
+            toast.error(`Start Failed: ${err.message}`);
+        } finally {
+            setIsStarting(false);
+        }
     };
 
     if (isLoading) return <div className="p-10"><SkeletonTopic /></div>;
@@ -59,8 +127,28 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                         </h1>
                         <p className="text-zinc-500 dark:text-slate-400 font-light flex items-center gap-2">
                             <Target size={16} className="text-primary" />
-                            Dynamic path tailored for <span className="font-medium text-primary">student_001</span>
+                            Dynamic path tailored for <span className="font-medium text-primary">{localStorage.getItem('userId') || "User"}</span>
                         </p>
+
+                        <div className="pt-4">
+                            <button
+                                onClick={handleStartLearning}
+                                disabled={isStarting}
+                                className="inline-flex items-center gap-3 px-8 py-4 rounded-2xl bg-primary text-white font-bold text-sm hover:bg-primary/90 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 transition-all shadow-xl shadow-primary/20 group"
+                            >
+                                {isStarting ? (
+                                    <>
+                                        <Loader2 size={18} className="animate-spin" />
+                                        <span>Initialising...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>Start Learning</span>
+                                        <PlayCircle size={18} className="group-hover:translate-x-0.5 transition-transform" />
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     </div>
 
                     <div className="bg-white/60 dark:bg-white/[0.02] backdrop-blur-3xl border border-edu-border-light dark:border-white/5 rounded-[32px] p-6 flex items-center gap-6 shadow-xl transition-all">
@@ -191,7 +279,10 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                                                             </div>
 
                                                             <button
-                                                                onClick={() => onContinue(topic)}
+                                                                onClick={() => onContinue({
+                                                                    ...topic,
+                                                                    collectionId: plan?.system_metadata?.collection_id
+                                                                })}
                                                                 className={clsx(
                                                                     "flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all",
                                                                     isCompleted
@@ -228,7 +319,7 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                         </div>
                     </div>
                     <div className="text-[10px] uppercase font-bold tracking-[0.3em] text-primary transition-all animate-pulse">
-                        System Optimized for student_001
+                        System Optimized for {localStorage.getItem('userId') || "User"}
                     </div>
                 </footer>
             </div>

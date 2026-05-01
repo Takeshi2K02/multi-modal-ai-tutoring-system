@@ -16,7 +16,7 @@ os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 env = DummyVecEnv([lambda: TutorEnv()])
 
 # Load trained agent
-agent = RLEngine("models/dqn_model.zip", env=env)
+agent = RLEngine("models/ppo_model.zip", env=env)
 
 NUM_EPISODES = 5
 

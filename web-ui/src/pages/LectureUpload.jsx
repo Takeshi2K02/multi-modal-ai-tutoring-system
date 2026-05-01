@@ -87,8 +87,16 @@ const LectureUpload = ({ onBack, onSuccess }) => {
                     setAnalysisResult(response.data);
                     updateStatus(item.id, 'success', 'Analyzed successfully');
                 } else {
+                    // Phase 21: RAG Isolation - Use a stable collection ID for the batch
+                    let batchCollectionId = localStorage.getItem('last_upload_collection');
+                    if (!batchCollectionId || i === 0) {
+                        batchCollectionId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+                        localStorage.setItem('last_upload_collection', batchCollectionId);
+                    }
+
                     await axios.post(`${API_BASE_URL}/api/upload`, formData, {
-                        headers: { 'Content-Type': 'multipart/form-data' }
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                        params: { collection_id: batchCollectionId }
                     });
                     updateStatus(item.id, 'success', 'Ingested successfully');
                 }

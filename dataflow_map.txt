@@ -1,0 +1,189 @@
+=== SECTION 1: CV → MONGODB ===
+File: cv/backend/routes/engagement.py
+```python
+        # Save to database
+        engagement_log = EngagementLog.create(
+            user_id=user_id,
+            material_id=data.get('material_id'),
+            emotion=engagement_result['emotion'],
+            emotion_conf=engagement_result['emotion_conf'],
+            engagement_score=engagement_result['engagement_score'],
+            engagement_state=engagement_result['engagement_state'],
+            gaze=engagement_result['gaze'],
+            posture=engagement_result['posture'],
+            ocr_excerpt=engagement_result.get('ocr_excerpt'),
+            context_match=engagement_result.get('context_match'),
+            engagement_context_state=engagement_result.get('engagement_context_state')
+        )
+```
+File: cv/backend/models.py
+```python
+class EngagementLog:
+    @staticmethod
+    def create(user_id, material_id=None, emotion=None, emotion_conf=None, engagement_score=None,
+               engagement_state=None, gaze=None, posture=None, ocr_excerpt=None, context_match=None,
+               engagement_context_state=None):
+        log_data = {
+            'user_id': user_id,
+            'material_id': material_id,
+            'timestamp': datetime.now(),
+            'emotion': emotion,
+            'emotion_conf': emotion_conf,
+            'engagement_score': engagement_score,
+            'engagement_state': engagement_state,
+            'gaze': gaze,
+            'posture': posture,
+            'ocr_excerpt': ocr_excerpt,
+            'context_match': context_match,
+            'engagement_context_state': engagement_context_state
+        }
+        result = db.engagement_logs.insert_one(log_data)
+        log_data['_id'] = result.inserted_id
+        return log_data
+```
+
+=== SECTION 2: MONGODB → RL READ ===
+File: rl_engine/src/env/tutor_env.py
+```python
+    def sync_with_db(self, user_id):
+        db = self._get_db()
+        latest_cv = db.StudentEngagement.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+        if latest_cv:
+            self.state["attention"] = latest_cv.get("engagement_score", self.state["attention"])
+            self.state["emotion_confidence"] = latest_cv.get("emotion_conf", 1.0)
+            gaze = latest_cv.get("gaze", "forward")
+            self.state["gaze_score"] = 1.0 if gaze in ["forward", "screen"] else 0.0
+            # ... posture and emotion mapping ...
+
+    def _vec(self):
+        s = self.state
+        p = self.profile
+        return np.array([
+            s["attention"], s["confusion"], s["boredom"], s["difficulty"],
+            s["recent_acc"], s["time_on_task"], s["mastery_level"],
+            s["session_fatigue"], s["emotion_confidence"], s["gaze_score"],
+            s["posture_score"], p["avg_accuracy"], p["avg_attention"],
+            p.get("sessions_completed", 1) / 10.0
+        ], dtype=np.float32)
+```
+
+=== SECTION 3: RL → AGENTIC CORE POST ===
+File: rl_engine/main.py
+```python
+    # Broadcast to Agentic AI Core (Live Telemetry Hub)
+    try:
+        import requests
+        requests.post("http://localhost:8000/api/telemetry/rl", json={
+            "user_id": student_id,
+            "action_id": packet["action_id"],
+            "confidence": packet["confidence"],
+            "reasoning": f"Live DQN inference loop. Sync active."
+        }, timeout=0.5)
+    except Exception as e:
+        pass
+```
+
+=== SECTION 4: AGENTIC CORE RECEIVING ENDPOINT ===
+File: server.py
+```python
+@fastapi_app.post("/api/telemetry/rl")
+async def receive_rl_telemetry(req: RLTelemetryRequest):
+    from integration.persistence import push_rl_strategy
+    await push_rl_strategy(req.user_id, req.action_id, req.confidence, req.reasoning)
+    return {"status": "telemetry_logged"}
+```
+
+=== SECTION 5: USER_ID / STUDENT_ID PROPAGATION ===
+./mocks/data_generators.py:5: DEFAULT_STUDENT_ID = "alex_123"
+./server.py:539: student_id = "alex_123"
+./server.py:564: "student_id": "alex_123"
+./server.py:699: async def get_historical_analytics(user_id: str = "alex_123")
+./server.py:765: async def get_latest_telemetry(user_id: str = "alex_123")
+./rl_engine/main.py:15: student_id = "alex_123"
+./web-ui/src/App.jsx:333: userId="alex_123"
+./scripts/main.py:15: student_id = "alex_123"
+
+=== SECTION 6: AGENT_CORE/SNAPSHOT.PY FULL FILE ===
+```python
+import os
+from datetime import datetime, timedelta
+from pymongo import MongoClient
+from agent_core.schemas import StudentStateSnapshot, RL_ACTION_MAP
+
+# Global DB connection for efficiency
+_client = None
+_db = None
+
+def _get_db():
+    global _client, _db
+    if _db is None:
+        mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/ai_tutor_db')
+        _client = MongoClient(mongo_uri)
+        _db = _client.get_database()
+    return _db
+
+def calculate_lesson_benchmark(text: str, student_profile: dict, topic: str = "") -> int:
+    word_count = len(text.split())
+    reading_speed = student_profile.get("average_reading_speed", 200)
+    base_time = (word_count / reading_speed) * 60
+    multiplier = 1.0
+    if "Dimensional Modelling" in topic or "Dimensional" in topic:
+        return 15
+    estimated_time = int(base_time * multiplier)
+    return max(30, estimated_time)
+
+def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
+    db = _get_db()
+    latest_cv = db.StudentEngagement.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+    latest_perf = db.Performance.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+    latest_rl = db.PedagogicalStrategy.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+
+    if not latest_cv:
+        return StudentStateSnapshot(
+            engagement_trend="stable",
+            current_affect={"emotion": "neutral", "score": 0.5},
+            rl_strategy="Diagnostic Mode - Baseline Curriculum",
+            performance_summary="New student. Initial calibration needed.",
+            deviation_alert=False
+        )
+
+    thirty_seconds_ago = datetime.now() - timedelta(seconds=10)
+    recent_logs = list(db.StudentEngagement.find({
+        "user_id": user_id,
+        "timestamp": {"$gte": thirty_seconds_ago}
+    }).sort("timestamp", -1))
+
+    trend = "stable"
+    if len(recent_logs) >= 2:
+        diff = recent_logs[0]["engagement_score"] - recent_logs[-1]["engagement_score"]
+        if diff > 0.15: trend = "improving"
+        elif diff < -0.15: trend = "declining"
+
+    hist_avg = sum(l["engagement_score"] for l in recent_logs) / len(recent_logs) if recent_logs else 0.5
+
+    latest_interaction = db.interactions.find_one({"student_id": user_id}, sort=[("timestamp", -1)])
+    intervention_needed = False
+    if latest_interaction:
+        start_time = latest_interaction.get("timestamp", datetime.now())
+        reading_time = 15
+        is_done = latest_interaction.get("is_completed", False)
+        time_elapsed = (datetime.now() - start_time).total_seconds()
+        if time_elapsed < 600 and reading_time > 0 and time_elapsed > reading_time and not is_done and hist_avg < 0.98:
+            intervention_needed = True
+
+    action_id = latest_rl.get("action_id", 0) if latest_rl else 0
+    strategy_name = RL_ACTION_MAP.get(action_id, {}).get("name", "General Instruction")
+
+    return StudentStateSnapshot(
+        engagement_trend=trend,
+        current_affect={"emotion": latest_cv.get("emotion", "neutral"), "score": latest_cv.get("engagement_score", 0.5)},
+        rl_strategy=strategy_name,
+        action_id=action_id,
+        performance_summary=f"Accuracy: {latest_perf.get('accuracy', 0)*100:.0f}%" if latest_perf else "Monitoring active.",
+        deviation_alert=intervention_needed,
+        intervention_needed=intervention_needed,
+        mastery_level=latest_perf.get("mastery", 0.5) if latest_perf else 0.5,
+        session_fatigue=0.0,
+        confidence=latest_cv.get("emotion_conf", 0.5)
+    )
+```

@@ -1,0 +1,21 @@
+Fix Log - Phase 4
+
+[Fix 1] cv/backend/routes/engagement.py
+- Line 55: Added sync logic to write engagement data to MongoDB 'StudentEngagement' collection.
+- Line 57: Added 'from models import db'.
+- Line 58-73: Implemented db.StudentEngagement.insert_one with error handling.
+
+[Fix 2] rl_engine/main.py
+- Line 14: Added comment "# DISABLED: Duplicate RL source. Primary RL decision is handled by PedagogicalAgent in integration/persistence.py."
+- Line 15: Added 'if False:' to disable the main loop.
+- Line 16-38: Indented existing while loop block.
+
+[Fix 3] server.py
+- Line 536: Updated run_simulation signature to: async def run_simulation(req: ScenarioRequest, user_id: str):
+- Line 539: Replaced student_id = "alex_123" with student_id = req.student_id if hasattr(req, 'student_id') else user_id.
+- Line 564: Replaced hardcoded "alex_123" with student_id variable in initial_state dict.
+- Line 699: Removed default value "alex_123" from user_id parameter in get_historical_analytics.
+- Line 765: Removed default value "alex_123" from user_id parameter in get_latest_telemetry.
+
+[Fix 4] rl_engine/main.py
+- Line 36: Replaced 'pass' with print statement to log telemetry POST failures.

@@ -1,0 +1,184 @@
+=== SECTION 1: FOLDER STRUCTURE ===
+.
+├── agent_core
+│   ├── graph.py
+│   ├── llm.py
+│   ├── optimization.py
+│   ├── pedagogical_agent.py
+│   ├── schemas.py
+│   ├── snapshot.py
+│   └── strategy_taxonomy.py
+├── cv
+│   ├── backend
+│   │   ├── app.py
+│   │   ├── models.py
+│   │   └── services
+│   │       ├── engagement_service.py
+│   │       └── ml_models.py
+│   └── trained_models
+├── db
+│   ├── connection.py
+│   └── schemas.py
+├── docs
+├── integration
+│   └── persistence.py
+├── local_data
+├── rl_engine
+│   ├── app.py
+│   ├── main.py
+│   ├── models
+│   │   └── dqn_model.zip
+│   └── src
+│       ├── engine
+│       │   └── rl_engine.py
+│       └── train
+│           └── train_dqn.py
+├── scripts
+├── server.py
+├── services
+│   ├── decomposition_service.py
+│   ├── ingestion_service.py
+│   └── learning_session_service.py
+└── web-ui
+
+=== SECTION 2: ENTRY POINT ===
+File: server.py
+```python
+import sys
+import os
+import asyncio
+import warnings
+import atexit
+from datetime import datetime, timedelta
+
+# Project ID: 25-26J-130: Clean Logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['GLOG_minloglevel'] = '3'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
+os.environ['TQDM_DISABLE'] = '1' # Block progress bars
+
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
+warnings.filterwarnings("ignore", message=".*ChatVertexAI.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
+
+# Silence high-frequency third-party loggers
+import logging
+for logger_name in ["transformers", "mediapipe", "absl", "google", "google_auth_httplib2"]:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
+def cleanup_resources():
+    """Project ID: 25-26J-130: Robust semaphore cleanup."""
+    # print(">>> Performing resource cleanup...")
+```
+
+=== SECTION 3: LANGGRAPH GRAPH DEFINITION ===
+File: agent_core/graph.py
+```python
+def create_tot_graph():
+    workflow = StateGraph(AgentState)
+    
+    workflow.add_node("retrieve_context", retrieve_context)
+    workflow.add_node("expand_frontier", expand_frontier)
+    workflow.add_node("evaluate_frontier", evaluate_frontier)
+    workflow.add_node("prune_frontier", prune_frontier)
+    workflow.add_node("background_synthesis", background_synthesis)
+    workflow.add_node("finalize_output", finalize_output)
+    
+    workflow.set_entry_point("retrieve_context")
+    
+    workflow.add_edge("retrieve_context", "expand_frontier")
+    workflow.add_edge("expand_frontier", "evaluate_frontier")
+    workflow.add_edge("evaluate_frontier", "prune_frontier")
+    
+    workflow.add_conditional_edges(
+        "prune_frontier",
+        check_stop_condition,
+        {
+            "expand": "expand_frontier",
+            "finalize": "finalize_output",
+            "shadow": "background_synthesis"
+        }
+    )
+
+    workflow.add_edge("background_synthesis", END)
+    workflow.add_edge("finalize_output", END)
+    
+    return workflow.compile()
+```
+
+=== SECTION 4: DQN MODEL AND INFERENCE LOOP ===
+File: rl_engine/src/engine/rl_engine.py
+```python
+class RLEngine:
+    def __init__(self, model_path=None, env=None):
+        if model_path:
+            self.model = PPO.load(model_path, env=env) # Note: Upgraded to PPO
+        else:
+            self.model = None
+
+    def decide(self, observation):
+        action, _ = self.model.predict(observation, deterministic=False)
+        return {"action_id": int(action), "confidence": 1.0, "timestamp": time.time()}
+```
+File: rl_engine/src/train/train_dqn.py (Legacy Config)
+```python
+model = DQN(
+    "MlpPolicy",
+    env,
+    learning_rate=1e-3,
+    buffer_size=50000,
+    learning_starts=1000,
+    batch_size=64,
+    tau=1.0,
+    gamma=0.99,
+    train_freq=4,
+    target_update_interval=1000,
+    exploration_fraction=0.4,
+    exploration_final_eps=0.1,
+    verbose=1,
+)
+```
+
+=== SECTION 5: CV PIPELINE ===
+File: cv/backend/services/engagement_service.py
+```python
+def process_engagement_data(frame_data, screen_data=None, material_id=None):
+    # ... decoding and model init ...
+    engagement_result = engagement_model.predict(frame)
+    engagement_score = calculate_engagement_score(engagement_result)
+    engagement_state = get_engagement_state(engagement_score)
+    # ... stability filtering ...
+    return result
+
+def calculate_engagement_score(engagement_result):
+    score = 0.5  # Base score
+    # Weights: Emotion (0.6), Gaze (0.2), Posture (0.2)
+    emotion_score = emotion_scores.get(engagement_result['emotion'], 0.5)
+    score += (emotion_score - 0.5) * 0.6
+    score += gaze_scores.get(engagement_result['gaze'], 0)
+    score += posture_scores.get(engagement_result['posture'], 0)
+    return max(0.0, min(1.0, score))
+```
+
+=== SECTION 6: MONGODB USAGE ===
+File: server.py
+```python
+latest_engagement = db.StudentEngagement.find_one(sort=[("timestamp", -1)])
+cv_logs = list(db.StudentEngagement.find({"user_id": user_id, "timestamp": {"$gte": one_day_ago}}))
+profiles.insert_one(profile)
+profiles.update_one({"student_id": req.student_id}, {"$set": {"preferred_modality": weights}})
+```
+File: agent_core/snapshot.py
+```python
+latest_cv = db.StudentEngagement.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+latest_perf = db.Performance.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+latest_rl = db.PedagogicalStrategy.find_one({"user_id": user_id}, sort=[("timestamp", -1)])
+```
+File: services/learning_session_service.py
+```python
+result = self.sessions.insert_one(session_doc)
+self.performance.insert_one(record)
+self.sessions.update_one({"_id": ObjectId(session_id)}, {"$set": {"is_completed": True}})
+```

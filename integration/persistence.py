@@ -39,6 +39,7 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
     """
     Called by the CV module every 1.5s to log engagement and emotion.
     """
+    # print(f"[Pipeline] 👁️ CV Sensor Agent: Received telemetry for {user_id}")
     db = _get_db()
     log_entry = {
         "user_id": user_id,
@@ -77,8 +78,10 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
         
         # 2. Run Inference
         agent = PedagogicalAgent(user_id)
+        # print(f"[Pipeline] 🧠 DQN Inference: Polling for optimal strategy for student state...")
         distribution = agent.get_action_distribution(engagement_score, emotion, profile)
         decision = agent.select_action(distribution)
+        # print(f"[Pipeline] 🎯 DQN Result: Selected '{decision['policy_name']}' (Confidence: {decision['confidence']:.2f})")
         
         # 3. Emit Policy Update for Live Monitor
         await _emit_event("policy_update", {
@@ -89,7 +92,7 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
         })
         
         # 4. Reward Calculation Log
-        print(f"[RL Engine] --- Input Engagement: {engagement_score:.2f} | Selected Strategy: {decision['policy_name']} | Confidence: {int(decision['confidence']*100)}% ---")
+        # print(f"[RL Engine] --- Input Engagement: {engagement_score:.2f} | Selected Strategy: {decision['policy_name']} | Confidence: {int(decision['confidence']*100)}% ---")
         
         # 5. Persist the Strategy Decision
         await push_rl_strategy(user_id, decision["action_id"], decision["confidence"], decision["reasoning"])
@@ -120,7 +123,7 @@ async def push_rl_strategy(user_id: str, action_id: int, confidence: float, reas
     if state_changed or heartbeat:
         from agent_core.schemas import RL_ACTION_MAP
         action_name = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown")
-        print(f"[RL] Selected Action: {action_id} ({action_name}) | Conf: {confidence:.2f} {'(State Change)' if state_changed and not heartbeat else '(Heartbeat)'}")
+        # print(f"[RL] Selected Action: {action_id} ({action_name}) | Conf: {confidence:.2f} {'(State Change)' if state_changed and not heartbeat else '(Heartbeat)'}")
         _last_rl_print_time = now
         _last_rl_action = action_id
     

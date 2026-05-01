@@ -15,11 +15,18 @@ PROCESSED_CHUNKS_DIR = os.path.join(os.getcwd(), "local_data", "processed_chunks
 os.makedirs(RAW_DOC_DIR, exist_ok=True)
 os.makedirs(PROCESSED_CHUNKS_DIR, exist_ok=True)
 
-async def ingest_document(file_content: bytes, filename: str):
+from bson import ObjectId
+from db.connection import get_db_connection
+
+async def ingest_document(file_content: bytes, filename: str, collection_id: str = None, plan_id: str = None):
     """
     Process any supported document file and ingest into VectorDB.
     """
-    print(f"Ingesting {filename}...")
+    if not collection_id:
+        collection_id = str(uuid.uuid4())
+        print(f"[Ingest] Generated new collection_id (UUID): {collection_id}")
+
+    print(f"Ingesting {filename} (Collection: {collection_id})...")
     
     # 1. Save Raw File
     file_path = os.path.join(RAW_DOC_DIR, filename)
@@ -44,26 +51,48 @@ async def ingest_document(file_content: bytes, filename: str):
     debug_path = os.path.join(PROCESSED_CHUNKS_DIR, f"{filename}.json")
     with open(debug_path, "w") as f:
         json.dump(chunks, f, indent=2)
-        
+    
     # 4. Push to VectorDB
     vectordb = get_vector_db()
     
     docs_to_add = []
     for chunk in chunks:
+        meta = {
+            "source_file": filename,
+            "lecture_title": chunk["lecture_title"],
+            "page_number": chunk.get("page_number", 1),
+            "chunk_index": chunk["chunk_index"],
+            "file_type": ext
+        }
+        if collection_id:
+            meta["collection_id"] = collection_id
+            print(f"[Ingest] Assigned collection_id: {collection_id} to {filename}")
+        else:
+            print(f"[Ingest] WARNING: No collection_id provided for {filename}")
+
         docs_to_add.append({
             "id": chunk["doc_id"],
             "text": chunk["text"],
-            "metadata": {
-                "source_file": filename,
-                "lecture_title": chunk["lecture_title"],
-                "page_number": chunk.get("page_number", 1),
-                "chunk_index": chunk["chunk_index"],
-                "file_type": ext
-            }
+            "metadata": meta
         })
         
+    if docs_to_add:
+        print(f"[Ingest] Sample Metadata (Chunk 0): {docs_to_add[0]['metadata']}")
     vectordb.add_documents(docs_to_add)
-    return {"status": "success", "chunks_count": len(chunks)}
+
+    # --- BUG 1: Write collection_id back to Plan Document ---
+    if plan_id:
+        try:
+            db = get_db_connection()
+            db.learning_plans.update_one(
+                { "_id": ObjectId(plan_id) },
+                { "$set": { "system_metadata.collection_id": collection_id } }
+            )
+            print(f"[Ingest] ✅ collection_id {collection_id} saved to plan {plan_id}")
+        except Exception as e:
+            print(f"[Ingest] ❌ Failed to save collection_id to plan: {e}")
+
+    return {"status": "success", "chunks_count": len(chunks), "collection_id": collection_id}
 
 def _chunk_text(text: str, doc_id_prefix: str, lecture_title: str, filename: str, page_num: int = 1) -> List[Dict[str, Any]]:
     """Helper to chunk text consistently."""

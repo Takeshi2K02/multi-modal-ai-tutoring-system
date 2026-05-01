@@ -268,6 +268,38 @@ class LearningSessionService:
             session["last_accessed_at"] = datetime.now()
             return True
 
+    def start_session(self, session_id: str, topic_id: str) -> bool:
+        """
+        Updates session status to IN_PROGRESS and sets the current topic.
+        (Project ID: 25-26J-130)
+        """
+        print(f"Starting session {session_id} for topic: {topic_id}")
+        if self.sessions is not None:
+            try:
+                self.sessions.update_one(
+                    {"_id": ObjectId(session_id)},
+                    {
+                        "$set": {
+                            "status": "IN_PROGRESS",
+                            "progress.current_topic_id": topic_id,
+                            "last_accessed_at": datetime.now()
+                        }
+                    }
+                )
+                return True
+            except Exception as e:
+                print(f"Start Session Error: {e}")
+                return False
+        else:
+            # Mock
+            session = LearningSessionService.MOCK_DB.get(session_id)
+            if session:
+                session["status"] = "IN_PROGRESS"
+                session["progress"]["current_topic_id"] = topic_id
+                session["last_accessed_at"] = datetime.now()
+                return True
+            return False
+
     def save_performance_record(self, record: Dict[str, Any]) -> bool:
         """
         Saves a student's performance record for a topic.
@@ -299,3 +331,31 @@ class LearningSessionService:
                 del LearningSessionService.MOCK_DB[session_id]
                 return True
             return False
+
+
+def record_performance(student_id: str, payload: dict):
+    """
+    Called after quiz submission or subtopic completion.
+    Writes to db.Performance for RL state vector consumption.
+    """
+    from datetime import datetime
+    from db.connection import get_db_connection
+    db = get_db_connection()
+    
+    quiz_accuracy = payload.get("quiz_score", 0.5)
+    estimated_difficulty = round(1.0 - quiz_accuracy, 4)
+    current_mastery = payload.get("mastery_level", 0.5)
+    updated_mastery = round(min(1.0, max(0.0, current_mastery + (quiz_accuracy - 0.5) * 0.1)), 4)
+    
+    try:
+        db.Performance.insert_one({
+            "user_id": student_id,
+            "subtopic": payload.get("subtopic", "unknown"),
+            "accuracy": quiz_accuracy,
+            "difficulty": estimated_difficulty,
+            "mastery": updated_mastery,
+            "timestamp": datetime.utcnow()
+        })
+        print(f"[Session] Performance record written: user={student_id}, difficulty={estimated_difficulty}, mastery={updated_mastery}")
+    except Exception as e:
+        print(f"[Session] WARNING: Failed to write Performance record: {e}")

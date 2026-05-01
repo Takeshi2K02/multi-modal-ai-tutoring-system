@@ -16,8 +16,13 @@ def get_db_connection():
     Returns the database object.
     """
     try:
-        # tlsCAFile=certifi.where() fixes SSL certificate verify failed on Mac
-        client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+        # Fix: SSL only for remote connections
+        client_options = {"serverSelectionTimeoutMS": 5000}
+        if "mongodb+srv" in MONGO_URI or "ssl=true" in MONGO_URI.lower():
+            import certifi
+            client_options["tlsCAFile"] = certifi.where()
+            client_options["tls"] = True
+        client = MongoClient(MONGO_URI, **client_options)
         # Verify connection
         client.admin.command('ping')
         # Project ID: 25-26J-130: Clean Logging - Suppress success ping
@@ -42,4 +47,9 @@ def get_interactions_collection(db):
 def get_profiles_collection(db):
     if db is not None:
         return db["student_profiles"]
+    return None
+
+def get_users_collection(db):
+    if db is not None:
+        return db["users"]
     return None

@@ -27,8 +27,11 @@ const GoalDecomposition = ({ onStart }) => {
         setError(null);
         setResult(null);
         try {
+            // Phase 21: RAG Isolation - Backend now resolves this from user session
             const data = await decomposeGoal(goal);
-            setResult(data);
+
+            // Inject collectionId into result so subsequent steps (AgentDebugger) can use it
+            setResult({ ...data, collectionId: data.collectionId || null });
         } catch (err) {
             console.error(err);
             setError("Unable to generate curriculum. Please check your connection.");
@@ -41,8 +44,9 @@ const GoalDecomposition = ({ onStart }) => {
         setSaving(true);
         try {
             const { saveLearningPlan, createSession } = await import('../services/api');
+            const studentId = localStorage.getItem('userId') || "student_001";
             const saved = await saveLearningPlan(result);
-            const session = await createSession(saved.plan_id, "student_001");
+            const session = await createSession(saved.plan_id, studentId);
             onStart(session.session_id);
         } catch (e) {
             const msg = e.response?.data?.detail || "Failed to initialize learning path.";

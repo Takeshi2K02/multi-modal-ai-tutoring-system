@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from '../services/api';
 
-const LiveAffectSensing = ({ userId = "alex_123", materialId = "active_lesson", enabled = false, interactionId = null }) => {
+const LiveAffectSensing = ({ userId, materialId = "active_lesson", enabled = false, interactionId = null }) => {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const [cameraActive, setCameraActive] = useState(false);

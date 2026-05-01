@@ -3,7 +3,60 @@ import axios from 'axios';
 // Ensure this matches uvicorn port
 export const API_BASE_URL = 'http://localhost:8000';
 
-export const runSimulation = async (scenario, topicContext = null, synthesisId = null) => {
+// Auth Interceptor
+axios.interceptors.request.use(
+    (config) => {
+        const token = localStorage.getItem('token');
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
+        return config;
+    },
+    (error) => Promise.reject(error)
+);
+
+export const login = async (username, password) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/auth/login`, { username, password });
+        if (response.data.access_token) {
+            localStorage.setItem('token', response.data.access_token);
+        }
+        return response.data;
+    } catch (error) {
+        console.error("Login Error:", error);
+        throw error;
+    }
+};
+
+export const register = async (username, password) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/auth/register`, { username, password });
+        return response.data;
+    } catch (error) {
+        console.error("Registration Error:", error);
+        throw error;
+    }
+};
+
+export const logout = () => {
+    localStorage.removeItem('token');
+};
+
+export const startSessionTopic = async (sessionId, topicId, collectionId = null) => {
+    try {
+        const payload = { session_id: sessionId, topic_id: topicId };
+        if (collectionId) {
+            payload.collection_id = collectionId;
+        }
+        const response = await axios.post(`${API_BASE_URL}/api/session/start`, payload);
+        return response.data;
+    } catch (error) {
+        console.error("Session Start Error:", error);
+        throw error;
+    }
+};
+
+export const runSimulation = async (scenario, topicContext = null, synthesisId = null, collectionId = null, sessionId = null) => {
     try {
         const payload = { scenario };
         if (topicContext) {
@@ -13,6 +66,12 @@ export const runSimulation = async (scenario, topicContext = null, synthesisId =
         if (synthesisId) {
             payload.synthesis_id = synthesisId;
         }
+        if (sessionId) {
+            payload.session_id = sessionId;
+        }
+        if (collectionId) {
+            payload.collection_id = collectionId;
+        }
         const response = await axios.post(`${API_BASE_URL}/api/run_sim`, payload);
         return response.data;
     } catch (error) {
@@ -21,9 +80,13 @@ export const runSimulation = async (scenario, topicContext = null, synthesisId =
     }
 };
 
-export const decomposeGoal = async (goal) => {
+export const decomposeGoal = async (goal, collectionId = null) => {
     try {
-        const response = await axios.post(`${API_BASE_URL}/api/goal_decompose`, { goal });
+        const payload = { goal };
+        if (collectionId) {
+            payload.collection_id = collectionId;
+        }
+        const response = await axios.post(`${API_BASE_URL}/api/goal_decompose`, payload);
         return response.data;
     } catch (error) {
         console.error("API Connection Error:", error);

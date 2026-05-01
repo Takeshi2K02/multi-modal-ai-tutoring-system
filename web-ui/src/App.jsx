@@ -23,17 +23,38 @@ import AgentDebugger from './pages/AgentDebugger';
 import LearningLayout from './components/LearningLayout';
 import LiveAffectSensing from './components/LiveAffectSensing';
 import { ThemeProvider } from './context/ThemeContext';
+import { AuthProvider, useAuth } from "./AuthContext";
+import LoginPage from "./LoginPage";
+import { Toaster, toast } from 'react-hot-toast';
 
-const socket = io('http://localhost:8000');
+// Initialize socket without autoConnect to prevent premature connection attempts (Project ID: 25-26J-130)
+const socket = io('http://localhost:8000', {
+  auth: { token: localStorage.getItem("token") },
+  transports: ["websocket"],
+  autoConnect: false,
+});
 
-function App() {
-  const [view, setView] = useState('decomposition'); // Default: 'decomposition'
+function AppInner() {
+  const { token, userId } = useAuth();
+  const [view, setView] = useState('login'); 
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [currentTopicContext, setCurrentTopicContext] = useState(null);
   const [isLessonReady, setIsLessonReady] = useState(false);
   const [contentGenRequest, setContentGenRequest] = useState(null); // New State
   const [countdown, setCountdown] = useState(0); // New State
   const [preGeneratedContent, setPreGeneratedContent] = useState(null); // PHASE 4: Direct Handoff
+  
+  // Manage Socket Connection (Project ID: 25-26J-130)
+  useEffect(() => {
+    if (token) {
+      socket.auth.token = token;
+      socket.connect();
+      console.log(">>> [Pipeline] Socket connecting with token...");
+    } else {
+      socket.disconnect();
+      console.log(">>> [Pipeline] Socket disconnected (no token)");
+    }
+  }, [token]);
 
   // Dynamic Title
   useEffect(() => {
@@ -42,14 +63,41 @@ function App() {
       curriculum: 'EduSynth - Curriculum',
       lesson: 'EduSynth - Lesson',
       dashboard: 'EduSynth - My Learning',
-      agent: 'EduSynth - Agent View',
       upload: 'EduSynth - Upload',
       monitor: 'EduSynth - Admin Monitor',
       data: 'EduSynth - Data Center',
-      agent: 'EduSynth - Agent Debugger'
+      agent: 'EduSynth - Agent Debugger',
+      login: 'EduSynth - Login'
     };
     document.title = titles[view] || 'EduSynth AI Tutor';
   }, [view]);
+
+  // Agent Core Reachability Check
+  useEffect(() => {
+    const checkCore = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/health`);
+        if (res.ok) {
+          console.log(">>> [Pipeline] Agentic Core on port 8000 is REACHABLE");
+        } else {
+          console.warn(">>> [Pipeline] Agentic Core returned non-OK status");
+        }
+      } catch (err) {
+        console.error(">>> [Pipeline] Agentic Core is UNREACHABLE", err);
+        toast.error("Agentic Core is unreachable. Check if the backend is running.", { duration: 5000 });
+      }
+    };
+    if (token) checkCore();
+  }, [token]);
+
+  // Auth Redirect Logic
+  useEffect(() => {
+    if (token && view === 'login') {
+      setView('decomposition');
+    } else if (!token && view !== 'login') {
+      setView('login');
+    }
+  }, [token, view]);
 
   // Agent State
   const [graphData, setGraphData] = useState(null);
@@ -66,9 +114,9 @@ function App() {
   const [demoPersona, setDemoPersona] = useState(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
 
-  // 1. Analytics Data Hooks
-  const { data: analytics } = useSWR(`${API_BASE_URL}/api/analytics/historical?user_id=alex_123`, fetcher);
-  const { data: latest } = useSWR(`${API_BASE_URL}/api/analytics/latest?user_id=alex_123`, fetcher, { refreshInterval: 2000 });
+  // 1. Analytics Data Hooks (Conditional fetching: SWR won't fetch if token/userId are missing)
+  const { data: analytics } = useSWR(token && userId ? `${API_BASE_URL}/api/analytics/historical?user_id=${userId}` : null, fetcher);
+  const { data: latest } = useSWR(token && userId ? `${API_BASE_URL}/api/analytics/latest?user_id=${userId}` : null, fetcher, { refreshInterval: 2000 });
 
   const cvStats = analytics?.cv_stats || {};
   const rlStats = analytics?.rl_stats || {};
@@ -124,6 +172,7 @@ function App() {
       // 2. Auto-Run Simulation
       // We add a small delay for visual effect so the user sees the transition
       const timer = setTimeout(() => {
+        console.log(">>> [Pipeline] Triggering handleRun with state:", randomPersona.state);
         handleRun(randomPersona.state); // Use the persona's state to drive the sim logic
       }, 1000);
 
@@ -140,24 +189,46 @@ function App() {
     setOutcome(null);
     setCountdown(0);
 
+    const toastId = toast.loading("Fetching your content...", {
+      style: {
+        borderRadius: '16px',
+        background: '#1e293b',
+        color: '#fff',
+        border: '1px solid rgba(255,255,255,0.1)'
+      }
+    });
+
     // Generate Synthesis ID for the session (Project ID: 25-26J-130)
     const synthesisId = `syn-${Date.now()}`;
     setOutcome({ meta: { interaction_id: synthesisId } }); // Optimistic state for listeners
 
     try {
-      // PROJECT ID: 25-26J-130: Immediate Redirect to Agent Debugger
-      setView('agent');
+      // Redirect removed to prevent jumping out of current context (Issue Fix)
+      
+      toast.loading("Analyzing topic chunks...", { id: toastId });
 
       const { runSimulation } = await import('./services/api');
-      // Pass the current topic context and synthesis_id
-      const result = await runSimulation(scenario, currentTopicContext, synthesisId);
+      // Pass the current topic context, synthesis_id, and collectionId (Phase 21)
+      const result = await runSimulation(
+        scenario,
+        currentTopicContext,
+        synthesisId,
+        currentTopicContext?.collectionId
+      );
+
+      toast.loading("Preparing your lesson...", { id: toastId });
+      
       setGraphData(result);
       setOutcome(result);
+
+      toast.success("Lesson synthesized successfully!", { id: toastId });
+
       // NOTE: Simulation complete, but we wait for VISUAL playback to finish before countdown.
     } catch (err) {
       console.error(err);
       const msg = err.response?.data?.detail || err.message || "Failed to connect to Agent backend.";
       setError(msg);
+      toast.error(`Synthesis Failed: ${msg}`, { id: toastId });
     } finally {
       setLoading(false);
     }
@@ -218,8 +289,8 @@ function App() {
       const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
       return () => clearTimeout(timer);
     } else if (countdown === 0 && contentGenRequest && view === 'agent') {
-      // Countdown finished, navigate!
-      setView('content-generation');
+      // Countdown finished, navigate to lesson view (Project ID: 25-26J-130)
+      setView('lesson');
     }
   }, [countdown, contentGenRequest, view]);
 
@@ -231,7 +302,7 @@ function App() {
       case 'decomposition':
         return (
           <GoalDecomposition
-            onBack={() => setView('agent')} // Optional Link
+            onBack={() => setView('upload')} // Navigates back to Upload instead of Agent Debugger
             onStart={(sessionId) => {
               setActiveSessionId(sessionId);
               setView('dashboard'); // Navigate to "My Knowledge Paths" view
@@ -245,11 +316,16 @@ function App() {
           <CurriculumBrowser
             sessionId={activeSessionId}
             onBack={() => setView('dashboard')}
-            onContinue={(topic) => {
+            onContinue={(topic, result) => {
               setCurrentTopicContext(topic);
-              setIsLessonReady(false); // Reset for next lesson
-              setPreGeneratedContent(null); // Clear old content
-              setView('agent'); // PROJECT ID: 25-26J-130: Immediate Redirect to Debugger
+              if (result) {
+                setPreGeneratedContent(result);
+                setIsLessonReady(true);
+              } else {
+                setIsLessonReady(false); // Reset for next lesson
+                setPreGeneratedContent(null); // Clear old content
+              }
+              setView('lesson'); // Always navigate to lesson (Issue Fix)
             }}
           />
         );
@@ -314,49 +390,64 @@ function App() {
             }}
           />
         );
+      case 'login':
+        return <LoginPage />;
       default:
         return <div>Unknown View</div>;
     }
   };
 
+  const isAuthPage = view === 'login';
+
   return (
-    <ThemeProvider>
-      <div className="flex flex-col h-screen w-screen bg-edu-bg-light dark:bg-edu-bg-dark text-edu-text-light dark:text-edu-text-dark transition-colors duration-300 overflow-hidden font-sans">
-        {/* Global Live CV Monitor - Survives sub-component crashes */}
+    <div className="flex flex-col h-screen w-screen bg-edu-bg-light dark:bg-edu-bg-dark text-edu-text-light dark:text-edu-text-dark transition-colors duration-300 overflow-hidden font-sans">
+      {/* Global Live CV Monitor - Survives sub-component crashes */}
+      {!isAuthPage && (
         <LiveAffectSensing
           key={view === 'lesson' ? `cv-${currentTopicContext?.id || 'active'}` : 'cv-idle'}
-          userId="alex_123"
+          userId={userId}
           materialId={currentTopicContext?.title || "generic_topic"}
           interactionId={outcome?.meta?.interaction_id}
           enabled={view === 'lesson'}
         />
+      )}
 
-        {/* Global Navbar - Elevated Z-Index */}
+      {/* Global Navbar - Elevated Z-Index */}
+      {!isAuthPage && (
         <div className="z-[100] relative">
           <Navbar currentView={view} onViewChange={setView} />
         </div>
+      )}
 
-        {/* Spacer ensures Navbar is cleared globally across all pages */}
-        <div className="h-[110px] w-full shrink-0" />
+      {/* Spacer ensures Navbar is cleared globally across all pages */}
+      {!isAuthPage && <div className="h-[110px] w-full shrink-0" />}
 
-        {/* Main Content Area */}
-        <div className="flex-1 overflow-hidden relative">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={view}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="h-full w-full"
-            >
-              {renderContent()}
-            </motion.div>
-          </AnimatePresence>
-        </div>
+      {/* Main Content Area */}
+      <div className="flex-1 overflow-hidden relative">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={view}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="h-full w-full"
+          >
+            {renderContent()}
+          </motion.div>
+        </AnimatePresence>
       </div>
-    </ThemeProvider>
+      <Toaster position="bottom-right" reverseOrder={false} />
+    </div>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AuthProvider>
+        <AppInner />
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}

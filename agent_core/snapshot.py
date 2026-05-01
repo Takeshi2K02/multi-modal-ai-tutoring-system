@@ -94,27 +94,32 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
         hist_avg = sum(l["engagement_score"] for l in recent_logs) / len(recent_logs)
 
     # 5. Intervention Trigger (Project ID: 25-26J-130)
-    # Trigger if: (Now > Start + ReadingTime) AND (Not Completed) AND (5MinAvg < 0.45)
+    MAX_SESSION_S = 3600 # 1-hour session benchmark (Issue 4)
     latest_interaction = db.interactions.find_one(
         {"student_id": user_id},
         sort=[("timestamp", -1)]
     )
     
     intervention_needed = False
+    session_fatigue = 0.0
+    
     if latest_interaction:
         start_time = latest_interaction.get("timestamp", datetime.now())
-        # reading_time = latest_interaction.get("estimated_reading_time", 120)
-        reading_time = 15 # PROJECT ID: 25-26J-130 SMOKE TEST OVERRIDE
+        reading_time = MAX_SESSION_S # Issue 4: Set benchmark to max_session_s
         is_done = latest_interaction.get("is_completed", False)
         
         time_elapsed = (datetime.now() - start_time).total_seconds()
+        
+        # Issue 4: Calculate Normalized Fatigue
+        session_fatigue = min(time_elapsed / MAX_SESSION_S, 1.0)
+        print(f"[DQN State] session_fatigue={session_fatigue:.4f} elapsed={time_elapsed:.1f}s max={MAX_SESSION_S}s")
         
         # Readiness Guard: Only trigger if the lesson has content (estimated_reading_time set)
         # Recency Guard: Only trigger if the interaction started recently (e.g., last 10 mins)
         is_recent = time_elapsed < 600 # 10 minutes
         is_ready = reading_time > 0
         
-        print(f"[Snapshot Debug] Student: {user_id}, Elapsed: {time_elapsed:.1f}s, Benchmark: {reading_time}s, Avg: {hist_avg:.2f}, Recent: {is_recent}")
+        print(f"[Snapshot Debug] Student: {user_id}, Elapsed: {time_elapsed:.1f}s, Benchmark: {MAX_SESSION_S}s, Avg: {hist_avg:.2f}, Recent: {is_recent}")
         
         if is_recent and is_ready and time_elapsed > reading_time and not is_done and hist_avg < 0.98:
             intervention_needed = True
@@ -142,6 +147,6 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
         deviation_alert=intervention_needed, # Mapping for backward compatibility
         intervention_needed=intervention_needed,
         mastery_level=latest_perf.get("mastery", 0.5) if latest_perf else 0.5,
-        session_fatigue=0.0,
+        session_fatigue=session_fatigue,
         confidence=latest_cv.get("emotion_conf", 0.5)
     )

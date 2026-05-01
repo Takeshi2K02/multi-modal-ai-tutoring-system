@@ -69,7 +69,7 @@ class AgentState(TypedDict):
     visual_tags: List[str]          # Project ID: 25-26J-130
     reasoning_trace: List[str]
     build_time: float
-    stop_early: bool
+    stop_early: bool  # default handled in retrieve_context node
     selected_strategy_label: Optional[str]
     interaction_outcome: Optional[str]
     interaction_id: Optional[str]
@@ -80,3 +80,7 @@ class AgentState(TypedDict):
     # Phase 19: Atomic Synthesis Guards
     handoff_buffer: List[Dict[str, Any]]
     synthesis_locked: bool
+    full_text: Optional[str]
+    current_modality: Optional[str]
+    start_time: float # Project ID: 25-26J-130: Timing & Progress
+    last_phase_time: float # Project ID: 25-26J-130

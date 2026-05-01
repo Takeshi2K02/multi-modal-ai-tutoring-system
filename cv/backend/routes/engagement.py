@@ -52,6 +52,28 @@ def track_engagement():
             engagement_context_state=engagement_result.get('engagement_context_state')
         )
 
+        # Fix 1: Sync to StudentEngagement collection
+        try:
+            from models import db
+            db.StudentEngagement.insert_one({
+                "user_id": user_id,
+                "timestamp": engagement_log['timestamp'],
+                "engagement_score": engagement_result['engagement_score'],
+                "emotion": engagement_result['emotion'],
+                "gaze": engagement_result['gaze'],
+                "posture": engagement_result['posture'],
+                "engagement_state": engagement_result['engagement_state'],
+                "interaction_id": data.get('material_id'),
+                "metadata": {
+                    "emotion_conf": engagement_result['emotion_conf'],
+                    "ocr_excerpt": engagement_result.get('ocr_excerpt'),
+                    "context_match": engagement_result.get('context_match'),
+                    "engagement_context_state": engagement_result.get('engagement_context_state')
+                }
+            })
+        except Exception as e:
+            print(f"[CV] StudentEngagement sync error: {e}")
+
         # Broadcast to Agentic AI Core (Live Telemetry Hub)
         try:
             import requests

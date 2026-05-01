@@ -1,0 +1,53 @@
+GEMINI TRANSITION AUDIT: LLAMA 3.1 -> GEMINI 2.5 FLASH (VERTEX AI)
+Date: 2026-03-01
+Status: ACTION REQUIRED
+
+1. SDK INSTALLATION & INITIALIZATION
+--------------------------------------
+- google-genai: INSTALLED (v1.56.0)
+- google-cloud-aiplatform (Vertex AI SDK): MISSING
+- langchain-google-genai: INSTALLED (v4.1.2)
+
+Assessment: You have the base Google GenAI SDK, but for native Vertex AI integration (enterprise features, regional hosting in us-central1), the 'google-cloud-aiplatform' library is recommended. LangChain currently uses 'ChatGoogleGenerativeAI' which defaults to the Google AI Studio API, not Vertex AI.
+
+Action: Run 'pip install google-cloud-aiplatform langchain-google-vertexai'
+
+2. ENVIRONMENT VARIABLES & CREDENTIALS
+--------------------------------------
+- GOOGLE_API_KEY: NOT FOUND in .env or environment.
+- GOOGLE_APPLICATION_CREDENTIALS: NOT FOUND.
+- Vertex AI Project ID: NOT FOUND.
+
+Assessment: The system is currently configured for 'ollama' (Llama 3). Transitioning to Vertex AI requires either a Service Account JSON (pointed to by GOOGLE_APPLICATION_CREDENTIALS) or a valid ADC (Application Default Credentials) setup via 'gcloud auth application-default login'.
+
+Action: 
+1. Map 'GOOGLE_APPLICATION_CREDENTIALS' to your Service Account JSON path.
+2. Add 'VERTEX_PROJECT_ID' and 'VERTEX_REGION=us-central1' to your .env file.
+
+3. MODEL CONNECTIVITY (gemini-2.5-flash in us-central1)
+-------------------------------------------------------
+- Connectivity Test: FAILED (Missing Credentials)
+- Model Availability: Cannot verify without active credentials.
+
+Assessment: Gemini 2.5 Flash is available on Vertex AI in us-central1, but the current 'get_llm()' logic in 'agent_core/llm.py' is hardcoded to 'gemini-2.0-flash-exp' and uses the Google AI Studio provider, not Vertex AI.
+
+4. RPM/TPM LIMITS & TREE OF THOUGHT (ToT) IMPACT
+------------------------------------------------
+- Vertex AI (Pay-as-you-go): Typically 2,000 RPM / 1M TPM for Gemini Flash models.
+- Impact on ToT: Your ToT logic expands multiple nodes. If your Beam Search width is high (e.g., >10) and depth is high, a single query could trigger 50+ LLM calls in parallel. 
+
+Assessment: At 2,000 RPM, you are safe for individual user sessions. However, if multiple users run ToT simultaneously, you may hit rate limits. 
+
+Recommendation: Implement an async semaphore or rate-limiter in 'agent_core/graph.py' to batch requests if scaling.
+
+REQUIRED CONFIGURATION CHANGES:
+-------------------------------
+1. Update .env:
+   LLM_PROVIDER=vertexai
+   VERTEX_PROJECT_ID=[your-project-id]
+   VERTEX_REGION=us-central1
+
+2. Update agent_core/llm.py to include:
+   from langchain_google_vertexai import ChatVertexAI
+   ...
+   return ChatVertexAI(model_name="gemini-2.5-flash", location="us-central1")

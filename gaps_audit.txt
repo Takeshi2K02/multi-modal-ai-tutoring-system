@@ -1,0 +1,234 @@
+=== SECTION 1: COLLECTION NAME MISMATCH ===
+Group: StudentEngagement
+- agent_core/snapshot.py:49 (find_one)
+- integration/persistence.py:54 (insert_one)
+- rl_engine/src/env/tutor_env.py:78 (find_one)
+- server.py:60 (logging check)
+- scripts/db_setup.py:27 (create_collection)
+
+Group: engagement_logs
+- cv/backend/init_db_mongo.py:64 (delete_many)
+- cv/backend/models.py:40 (create_index)
+- cv/backend/models.py:193 (class collection)
+
+Group: PedagogicalStrategy
+- agent_core/snapshot.py:61 (find_one)
+- integration/persistence.py:112 (insert_one)
+- server.py:1085 (find_one)
+
+Group: Performance
+- agent_core/snapshot.py:55 (find_one)
+- rl_engine/src/env/tutor_env.py:106 (find_one)
+
+Group: interactions
+- agent_core/snapshot.py:98 (find_one)
+- server.py:1034 (find_one)
+- server.py:1052 (update_one)
+- server.py:1151 (find)
+- db/connection.py:15 (db["interactions"])
+
+Group: student_profiles
+- integration/persistence.py:76 (find_one)
+- db/connection.py:16 (db["student_profiles"])
+
+=== SECTION 2: DIFFICULTY STATE VALUE SOURCE ===
+File: rl_engine/src/env/tutor_env.py
+```python
+    def __init__(self, max_steps=30):
+        # ...
+        self.state = {
+            "attention": 0.5, "confusion": 0.3, "boredom": 0.2,
+            "difficulty": 0.5, # Initialized to 0.5
+            "recent_acc": 0.5, "time_on_task": 0.0,
+            "mastery_level": 0.5, "session_fatigue": 0.0,
+            "emotion_confidence": 1.0, "gaze_score": 1.0, "posture_score": 1.0
+        }
+
+    def sync_with_db(self, user_id):
+        try:
+            db = self._get_db()
+            # ...
+            # 2. Latest Performance data
+            latest_perf = db.Performance.find_one(
+                {"user_id": user_id},
+                sort=[("timestamp", -1)]
+            )
+            if latest_perf:
+                self.state["recent_acc"] = latest_perf.get("accuracy", self.state["recent_acc"])
+                self.state["difficulty"] = latest_perf.get("difficulty", self.state["difficulty"]) # Value from db.Performance
+                self.state["mastery_level"] = latest_perf.get("mastery", self.state["mastery_level"])
+            # ...
+```
+
+=== SECTION 3: PPO MODEL VERIFICATION ===
+File: rl_engine/src/engine/rl_engine.py
+```python
+class RLEngine:
+    def __init__(self, model_path=None, env=None):
+        if model_path:
+            self.model = PPO.load(model_path, env=env) # Confirmed PPO
+        else:
+            self.model = None
+
+    def decide(self, observation):
+        """observation is a numpy array from DummyVecEnv"""
+        action, _ = self.model.predict(observation, deterministic=False)
+        return {"action_id": int(action), "confidence": 1.0, "timestamp": time.time()}
+```
+File: rl_engine/main.py
+```python
+BASE_DIR_RL = os.path.dirname(os.path.abspath(__file__))
+engine = RLEngine(os.path.join(BASE_DIR_RL, "models/dqn_model")) # Model path points to "models/dqn_model" but loads via PPO
+```
+
+=== SECTION 4: FULL RL_ENGINE/MAIN.PY ===
+```python
+from src.env.tutor_env import TutorEnv
+from src.engine.rl_engine import RLEngine
+from src.utils.logger import log_decision
+import time
+import os
+from datetime import datetime
+
+BASE_DIR_RL = os.path.dirname(os.path.abspath(__file__))
+env = TutorEnv()
+engine = RLEngine(os.path.join(BASE_DIR_RL, "models/dqn_model"))
+
+while True:
+    student_id = "alex_123"  # Target student for live monitoring
+    env.sync_with_db(student_id)
+    obs, _ = env.reset(student_id=student_id)
+    packet = engine.decide(obs)
+
+    log_decision(packet)
+
+    # Broadcast to Agentic AI Core (Live Telemetry Hub)
+    try:
+        import requests
+        requests.post("http://localhost:8000/api/telemetry/rl", json={
+            "user_id": student_id,
+            "action_id": packet["action_id"],
+            "confidence": packet["confidence"],
+            "reasoning": f"Live DQN inference loop. Sync active."
+        }, timeout=0.5)
+    except Exception as e:
+        pass
+    
+    time.sleep(3) # Faster loop for responsiveness
+```
+
+=== SECTION 5: INTEGRATION/PERSISTENCE.PY FULL FILE ===
+```python
+import os
+import time
+from pymongo import MongoClient
+from datetime import datetime
+from dotenv import load_dotenv
+from agent_core.pedagogical_agent import PedagogicalAgent
+
+load_dotenv()
+
+_last_cv_print_time = 0
+_last_cv_state = {"emotion": None, "score": 0}
+_last_rl_print_time = 0
+_last_rl_action = None
+
+_client = None
+_db = None
+
+def _get_db():
+    global _client, _db
+    if _db is None:
+        mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/ai_tutor_db')
+        _client = MongoClient(mongo_uri)
+        _db = _client.get_database()
+    return _db
+
+async def _emit_event(event, data):
+    from server import sio
+    try:
+        await sio.emit(event, data)
+    except Exception as e:
+        print(f"Socket Emit Error: {e}")
+
+async def push_cv_data(user_id: str, engagement_score: float, emotion: str, 
+                       gaze: str = "unknown", posture: str = "unknown", 
+                       engagement_state: str = "unknown", interaction_id: str = None,
+                       metadata: dict = None):
+    db = _get_db()
+    log_entry = {
+        "user_id": user_id, "timestamp": datetime.now(),
+        "engagement_score": engagement_score, "emotion": emotion,
+        "gaze": gaze, "posture": posture, "engagement_state": engagement_state,
+        "interaction_id": interaction_id, "metadata": metadata or {}
+    }
+    db.StudentEngagement.insert_one(log_entry)
+    
+    global _last_cv_print_time, _last_cv_state
+    now = time.time()
+    state_changed = (emotion != _last_cv_state["emotion"]) or (abs(engagement_score - _last_cv_state["score"]) > 0.3)
+    if state_changed or (now - _last_cv_print_time) >= 30:
+        print(f"[CV] Engagement: {engagement_score:.2f} | Emotion: {emotion}")
+        _last_cv_print_time = now
+        _last_cv_state = {"emotion": emotion, "score": engagement_score}
+    
+    if "_id" in log_entry: del log_entry["_id"]
+    log_entry["timestamp"] = log_entry["timestamp"].isoformat()
+    await _emit_event("cv_update", log_entry)
+    
+    try:
+        profile = db.student_profiles.find_one({"student_id": user_id}) or {}
+        agent = PedagogicalAgent(user_id)
+        distribution = agent.get_action_distribution(engagement_score, emotion, profile)
+        decision = agent.select_action(distribution)
+        await _emit_event("policy_update", {"user_id": user_id, "distribution": distribution, "selected_action": decision, "timestamp": datetime.now().isoformat()})
+        await push_rl_strategy(user_id, decision["action_id"], decision["confidence"], decision["reasoning"])
+    except Exception as e:
+        print(f"RL Bridge Error: {e}")
+
+async def push_rl_strategy(user_id: str, action_id: int, confidence: float, reasoning: str = None):
+    db = _get_db()
+    strategy_entry = {"user_id": user_id, "timestamp": datetime.now(), "action_id": action_id, "confidence": confidence, "reasoning": reasoning}
+    db.PedagogicalStrategy.insert_one(strategy_entry)
+    
+    global _last_rl_print_time, _last_rl_action
+    now = time.time()
+    if (action_id != _last_rl_action) or (now - _last_rl_print_time) >= 30:
+        from agent_core.schemas import RL_ACTION_MAP
+        action_name = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown")
+        print(f"[RL] Selected Action: {action_id} ({action_name}) | Conf: {confidence:.2f}")
+        _last_rl_print_time = now
+        _last_rl_action = action_id
+    
+    if "_id" in strategy_entry: del strategy_entry["_id"]
+    strategy_entry["timestamp"] = strategy_entry["timestamp"].isoformat()
+    strategy_entry["policy_name"] = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown")
+    await _emit_event("rl_update", strategy_entry)
+```
+
+=== SECTION 6: AGENT_CORE/SCHEMAS.PY ===
+```python
+class StudentStateSnapshot(BaseModel):
+    engagement_trend: str  # "declining", "stable", "improving"
+    current_affect: Dict[str, Any]
+    rl_strategy: str
+    performance_summary: str
+    deviation_alert: bool = False
+    mastery_level: float = 0.5    # 0.0 - 1.0 (Tie-breaker for ToT)
+    session_fatigue: float = 0.0  # 0.0 - 1.0
+    confidence: float = 0.5       # From emotion_conf
+    action_id: int = 0            # RL Action (0-8)
+    intervention_needed: bool = False
+
+RL_ACTION_MAP = {
+    0: {"name": "Maintain Current Content", "type": "baseline"},
+    1: {"name": "Simplify Explanation", "type": "remediation"},
+    2: {"name": "Provide Worked Example", "type": "demonstration"},
+    3: {"name": "Generate Practice Question", "type": "assessment"},
+    4: {"name": "Switch Learning Mode", "type": "modality_shift"},
+    5: {"name": "Suggest Break", "type": "wellbeing"},
+    6: {"name": "Increase Challenge", "type": "extension"},
+    7: {"name": "Review Prerequisite", "type": "remediation"},
+    8: {"name": "Prompt Reflection", "type": "metacognition"}
+}
+```

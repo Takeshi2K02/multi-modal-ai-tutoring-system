@@ -19,7 +19,7 @@ class LearningPlanService:
         # 1. Sanitize & Structure
         # Ensure we have required metadata
         plan_doc = {
-            "student_id": "alex_123", # Standardized for Project ID: 25-26J-130
+            "student_id": data.get("student_id"), # Pull from authenticated context (Project ID: 25-26J-130)
             "original_goal": data.get("goal", ""),
             "normalized_goal": data.get("generatedTitle") or data.get("goal", "").title(), # Use generated title
             "status": "ACTIVE",
@@ -41,7 +41,8 @@ class LearningPlanService:
             "system_metadata": {
                 "vector_provider": "local",
                 "source_real_data": True, 
-                "version": "1.0"
+                "version": "1.0",
+                "collection_id": data.get("collectionId") # Phase 21: RAG Isolation
             }
         }
 

@@ -1,0 +1,42 @@
+{
+  "S1": {
+    "name": "Student A - Easily Bored",
+    "avg_accuracy": 0.45,
+    "avg_attention": 0.30,
+    "preferred_modality": "interactive",
+    "sessions_completed": 3,
+    "best_action_history": [5, 2]
+  },
+  "S2": {
+    "name": "Student B - Confused Learner",
+    "avg_accuracy": 0.35,
+    "avg_attention": 0.55,
+    "preferred_modality": "worked_example",
+    "sessions_completed": 4,
+    "best_action_history": [1, 2]
+  },
+  "S3": {
+    "name": "Student C - High Performer Low Attention",
+    "avg_accuracy": 0.80,
+    "avg_attention": 0.35,
+    "preferred_modality": "challenge",
+    "sessions_completed": 6,
+    "best_action_history": [3]
+  },
+  "S4": {
+    "name": "Student D - Slow but Focused",
+    "avg_accuracy": 0.55,
+    "avg_attention": 0.75,
+    "preferred_modality": "hint",
+    "sessions_completed": 5,
+    "best_action_history": [0, 1]
+  },
+  "S5": {
+    "name": "Student E - Low Confidence",
+    "avg_accuracy": 0.40,
+    "avg_attention": 0.40,
+    "preferred_modality": "encouragement",
+    "sessions_completed": 2,
+    "best_action_history": [4, 5]
+  }
+}

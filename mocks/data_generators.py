@@ -2,7 +2,7 @@ import random
 from typing import Dict, Any
 
 # Deterministic default values
-DEFAULT_STUDENT_ID = "alex_123"
+DEFAULT_STUDENT_ID = "test_user"
 DEFAULT_CV_STATE = "neutral"
 DEFAULT_STRATEGY = "visual_aids"
 
@@ -37,7 +37,7 @@ def get_mock_student_profile(student_id: str = DEFAULT_STUDENT_ID, randomized: b
         "current_knowledge_level": {"math": "beginner"}
     }
 
-def get_mock_cv_inputs(randomized: bool = False, state: str = DEFAULT_CV_STATE) -> Dict[str, Any]:
+def get_mock_cv_inputs(student_id: str = DEFAULT_STUDENT_ID, randomized: bool = False, state: str = DEFAULT_CV_STATE) -> Dict[str, Any]:
     """
     Simulates inputs from the Computer Vision system (Real Output Format).
     """

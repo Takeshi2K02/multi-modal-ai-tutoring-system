@@ -24,12 +24,14 @@ class LocalVectorDB(VectorDBInterface):
             metadata={"hnsw:space": "cosine"}
         )
 
-    def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        # Query Chroma
+    def search(self, query: str, top_k: int = 10, filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        print(f"[VectorDB] Searching for: '{query}' with filter: {filter}")
         results = self.collection.query(
             query_texts=[query],
-            n_results=top_k
+            n_results=top_k,
+            where=filter
         )
+        print(f"[VectorDB] Found {len(results['ids'][0]) if results['ids'] else 0} results.")
         
         # Transform to standard format
         # Chroma returns lists of lists (one per query)
@@ -77,3 +79,10 @@ class LocalVectorDB(VectorDBInterface):
             ids=ids
         )
         print(f"LocalVectorDB: Added {len(documents)} documents.")
+
+    def delete_documents_by_source(self, source_filename: str):
+        """
+        Deletes all chunks associated with a specific source file.
+        """
+        self.collection.delete(where={"source_file": source_filename})
+        print(f"LocalVectorDB: Deleted all documents from {source_filename}.")

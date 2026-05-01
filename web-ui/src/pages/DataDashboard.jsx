@@ -33,9 +33,11 @@ import {
     ReferenceLine
 } from 'recharts';
 import { fetcher, API_BASE_URL } from '../services/api';
+import { useAuth } from "../AuthContext";
 
 const DataDashboard = () => {
-    const { data: analytics, error } = useSWR(`${API_BASE_URL}/api/analytics/profile/alex_123`, fetcher, {
+    const { userId } = useAuth();
+    const { data: analytics, error } = useSWR(`${API_BASE_URL}/api/analytics/profile/${userId}`, fetcher, {
         refreshInterval: 5000
     });
 
@@ -257,7 +259,7 @@ const DataDashboard = () => {
 
                 {/* Footer Disclaimer */}
                 <div className="mt-20 text-center opacity-40 hover:opacity-100 transition-all duration-1000">
-                    <p className="text-[10px] text-zinc-400 dark:text-slate-400 uppercase font-bold tracking-[0.4em]">Integrated Cognitive Audit Layer v1.2.0 • alex_123</p>
+                    <p className="text-[10px] text-zinc-400 dark:text-slate-400 uppercase font-bold tracking-[0.4em]">Integrated Cognitive Audit Layer v1.2.0 • {userId}</p>
                 </div>
 
             </div>

@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import time
 import warnings
 import atexit
 from datetime import datetime, timedelta
@@ -29,7 +30,8 @@ def cleanup_resources():
         from multiprocessing import resource_tracker
         resource_tracker._resource_tracker._fd = None # Force reset
         resource_tracker._resource_tracker.ensure_running()
-    except: pass
+    except Exception:
+        pass
 
 atexit.register(cleanup_resources)
 
@@ -42,14 +44,142 @@ from services.ingestion_service import ingest_document
 from services.analysis_service import analyze_pdf_anatomy
 
 from socketio import AsyncServer, ASGIApp
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
+import bcrypt
 
 # Initialize FastAPI
 fastapi_app = FastAPI()
+
+# --- Auth Configuration ---
+SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24 hours
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+
+class RegisterRequest(BaseModel):
+    full_name: str
+    email: str
+    password: str
+    birthday: str
+    role: str
+    preferred_learning_style: str
+    interested_areas: List[str]
+    strengths: List[str]
+    weaknesses: List[str]
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+def get_password_hash(password):
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed.decode('utf-8')
+
+def verify_password(plain_password, hashed_password):
+    password_byte_enc = plain_password.encode('utf-8')
+    hashed_password_byte_enc = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(password_byte_enc, hashed_password_byte_enc)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        return email
+    except JWTError:
+        raise credentials_exception
+
+# --- Auth Endpoints ---
+@fastapi_app.post("/api/auth/register")
+async def register(req: RegisterRequest):
+    db = get_db_connection()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    users = db["users"]
+    if users.find_one({"email": req.email}):
+        raise HTTPException(status_code=400, detail="Email already exists")
+    
+    # Hash the password on the backend before storing
+    hashed_password = get_password_hash(req.password)
+    
+    # Store full document exactly as requested
+    user_doc = {
+        "full_name": req.full_name,
+        "email": req.email,
+        "password_hash": hashed_password, 
+        "personal_info": {
+            "birthday": req.birthday,
+            "role": req.role
+        },
+        "learning_profile": {
+            "preferred_learning_style": req.preferred_learning_style,
+            "interested_areas": req.interested_areas,
+            "strengths": req.strengths,
+            "weaknesses": req.weaknesses
+        },
+        "created_at": datetime.utcnow()
+    }
+    
+    users.insert_one(user_doc)
+    return {"status": "success", "message": "User created"}
+
+@fastapi_app.post("/api/auth/login")
+async def login(req: LoginRequest):
+    db = get_db_connection()
+    if db is None:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    users = db["users"]
+    user = users.find_one({"email": req.email})
+    
+    # Secure verification using bcrypt
+    if not user or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    access_token = create_access_token(data={"sub": user["email"]})
+    return {"access_token": access_token, "token_type": "bearer", "user_id": user["email"]}
+
+class QuizSubmitRequest(BaseModel):
+    subtopic: str
+    score: float
+    mastery_level: Optional[float] = 0.5
+
+@fastapi_app.post("/api/session/quiz-submit")
+async def submit_quiz(req: QuizSubmitRequest, current_user: str = Depends(get_current_user)):
+    try:
+        from services.learning_session_service import record_performance
+        record_performance(current_user, {
+            "quiz_score": req.score,
+            "subtopic": req.subtopic,
+            "mastery_level": req.mastery_level
+        })
+        return {"status": "recorded", "student_id": current_user}
+    except Exception as e:
+        print(f"[Server] WARNING: record_performance failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Logging Noise Suppression ---
 import logging
@@ -66,6 +196,52 @@ logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 from socket_manager import sio
 app = ASGIApp(sio, fastapi_app)
+
+@sio.event
+async def connect(sid, environ, auth):
+    token = None
+    
+    # 1. Check 'auth' dictionary (modern socket.io style)
+    if auth and isinstance(auth, dict):
+        token = auth.get("token")
+        
+    # 2. Check HTTP Headers (fallback)
+    if not token:
+        auth_header = environ.get("HTTP_AUTHORIZATION", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+            
+    # 3. Check Query String (legacy/secondary fallback)
+    if not token:
+        qs = environ.get("QUERY_STRING", "")
+        for part in qs.split("&"):
+            if part.startswith("token="):
+                token = part[6:]
+    
+    if not token:
+        print(f"[Socket] Connection rejected for {sid}: No token provided.")
+        return False
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        await sio.save_session(sid, {"user_id": user_id})
+        print(f"[Socket] {sid} authenticated as {user_id}")
+    except Exception as e:
+        print(f"[Socket] Authentication failed for {sid}: {e}")
+        return False
+
+@sio.on("join_room")
+async def handle_join_room(sid, data):
+    session = await sio.get_session(sid)
+    authenticated_user_id = session.get("user_id")
+    requested_room = data.get("student_id")
+    if not authenticated_user_id or authenticated_user_id != requested_room:
+        print(f"[Room] REJECTED: {sid} tried to join {requested_room}, "
+              f"authenticated as {authenticated_user_id}")
+        return
+    await sio.enter_room(sid, requested_room)
+    print(f"[Room] {sid} joined room: {requested_room}")
 
 from socket_manager import get_sio
 
@@ -85,7 +261,6 @@ from agent_core.schemas import AgentState, ThoughtNode
 
 # Project ID: 25-26J-130: Proactive Intervention Monitor
 triggered_interventions = set()
-in_synthesis = set()
 active_student_synthesis = set() # Standardized Lock
 
 async def monitor_interventions():
@@ -96,15 +271,18 @@ async def monitor_interventions():
     while True:
         try:
             db = get_db_connection()
+            if db is None:
+                await asyncio.sleep(10)
+                continue
+                
             # Dynamic Student Detection: Find latest student with engagement logs
             latest_engagement = db.StudentEngagement.find_one(sort=[("timestamp", -1)])
             # 1. Presence Guard: Only monitor if student is actively sending telemetry
-            latest_engagement = db.StudentEngagement.find_one(sort=[("timestamp", -1)])
             if not latest_engagement:
                 await asyncio.sleep(10)
                 continue
             
-            student_id = latest_engagement["user_id"]
+            student_id = latest_engagement.get("user_id")
             last_ping = latest_engagement.get("timestamp")
             
             # If no telemetry for 30s, assume student is idle/away
@@ -131,16 +309,15 @@ async def monitor_interventions():
                 
                 if latest_inter:
                     inter_id = str(latest_inter["_id"])
-                    if inter_id not in triggered_interventions and inter_id not in in_synthesis:
+                    if inter_id not in triggered_interventions:
                         query = latest_inter.get("query")
                         if not query:
                             print(f">>> [Intervention] ⚠️ Skipping {inter_id}: Missing user query.")
                             continue
 
                         print(f">>> [Intervention] 🛰️ Stagnation Detected for {inter_id}. Triggering Shadow ToT...")
+                        print(f"[Pipeline] ⚠️ ToT Trigger: Engagement drop detected. Branching alternative paths...")
                         
-                        # Mark as in synthesis to prevent double-runs
-                        in_synthesis.add(inter_id)
                         
                         # 3. Trigger ToT in Shadow Mode
                         async def run_shadow():
@@ -177,10 +354,6 @@ async def monitor_interventions():
                                 )
                             except Exception as e:
                                 print(f">>> [Intervention] Shadow Run Failed: {e}")
-                            finally:
-                                # Remove from in_synthesis regardless of outcome
-                                if inter_id in in_synthesis:
-                                    in_synthesis.remove(inter_id)
                             
                         asyncio.create_task(run_shadow())
 
@@ -210,9 +383,12 @@ class ScenarioRequest(BaseModel):
     topic_title: Optional[str] = None
     topic_content: Optional[str] = None
     synthesis_id: Optional[str] = None
+    session_id: Optional[str] = None # Issue 2: For collection_id resolution
+    collection_id: Optional[str] = None # Phase 21: RAG Isolation
 
 class DecomposeRequest(BaseModel):
     goal: str
+    collection_id: Optional[str] = None # Phase 21: RAG Isolation
 
 class GraphResponse(BaseModel):
     nodes: List[Dict[str, Any]]
@@ -257,6 +433,11 @@ class StudentProgressRequest(BaseModel):
     content: Dict[str, Any]
     user_response: Optional[str] = None
     ai_evaluation_score: Optional[float] = None
+
+class SessionStartRequest(BaseModel):
+    session_id: str
+    topic_id: str
+    collection_id: Optional[str] = None
 
 class UserFeedbackRequest(BaseModel):
     student_id: str
@@ -392,9 +573,11 @@ async def evaluate_challenge(req: ChallengeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @fastapi_app.post("/api/learning_plan/save")
-async def save_learning_plan(request: SavePlanRequest):
+async def save_learning_plan(request: SavePlanRequest, user_id: str = Depends(get_current_user)):
     try:
         service = LearningPlanService()
+        # Ensure student_id matches authenticated user (Project ID: 25-26J-130)
+        request.plan_data["student_id"] = user_id
         plan_id = service.save_learning_plan(request.plan_data)
         return {"status": "success", "plan_id": plan_id}
     except Exception as e:
@@ -402,11 +585,11 @@ async def save_learning_plan(request: SavePlanRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @fastapi_app.post("/api/session/create")
-async def create_session(request: CreateSessionRequest):
-    print(f"Received Create Session Request: plan_id={request.plan_id}, student_id={request.student_id}")
+async def create_session(request: CreateSessionRequest, user_id: str = Depends(get_current_user)):
+    print(f"Received Create Session Request: plan_id={request.plan_id}, student_id={user_id}")
     try:
         service = LearningSessionService()
-        session_id = service.create_session(request.plan_id, request.student_id)
+        session_id = service.create_session(request.plan_id, user_id)
         print(f"Session Created Successfully: {session_id}")
         return {"status": "success", "session_id": session_id}
     except Exception as e:
@@ -433,6 +616,29 @@ async def delete_session(session_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Session not found or could not be deleted")
     return {"message": "Session deleted successfully"}
+
+@fastapi_app.post("/api/session/start")
+async def start_session_topic(req: SessionStartRequest, user_id: str = Depends(get_current_user)):
+    """
+    Standardized entry point for starting a learning node within a session.
+    Triggers the full agentic pipeline.
+    """
+    print(f"\n[Pipeline] 🚀 SESSION START: {req.session_id} | Topic: {req.topic_id}")
+    
+    # Reuse run_simulation logic but with session context
+    scenario_req = ScenarioRequest(
+        scenario="confused", # Default scenario for new start
+        topic_title=req.topic_id,
+        synthesis_id=f"syn-{int(time.time()*1000)}",
+        collection_id=req.collection_id
+    )
+    
+    # Update session status to IN_PROGRESS and set current topic (Project ID: 25-26J-130)
+    service = LearningSessionService()
+    service.start_session(req.session_id, req.topic_id)
+
+    # We call run_simulation logic directly
+    return await run_simulation(scenario_req, user_id=user_id)
 
 @fastapi_app.get("/api/sessions/student/{student_id}")
 async def get_student_sessions(student_id: str):
@@ -528,11 +734,88 @@ def transform_state_to_graph(state: AgentState) -> GraphResponse:
     )
 
 @fastapi_app.post("/api/run_sim", response_model=GraphResponse)
-async def run_simulation(req: ScenarioRequest):
-    print(f"Running scenario: {req.scenario}")
+async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_current_user)):
+    print(f"\n[Pipeline] 🚀 Start Learning Triggered for user: {user_id}")
+    print(f"[Pipeline] 🎯 Target Topic: {req.topic_title or 'Default'}")
     
-    student_id = "alex_123"
+    student_id = req.student_id if hasattr(req, 'student_id') else user_id
     
+    # --- Resolution chain: session → plan → collection_id ---
+    db = get_db_connection()
+    resolved_collection_id = None
+
+    session_id = req.session_id or req.synthesis_id
+
+    if not session_id:
+        print(f"[Pipeline] ❌ No session_id in request for {student_id}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=200, content={
+            "error": "NO_SESSION",
+            "message": "No session_id provided. Please start a learning session first."
+        })
+
+    try:
+        from bson import ObjectId
+        # Step 1 — Look up session in the correct collection: learning_sessions
+        session_doc = db.learning_sessions.find_one({"_id": ObjectId(session_id)})
+        if not session_doc:
+            print(f"[Pipeline] ❌ Session not found in learning_sessions: {session_id}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=200, content={
+                "error": "NO_SESSION",
+                "message": "Session not found. Please reload and try again."
+            })
+
+        print(f"[Pipeline] ✅ Session found: {session_id}")
+
+        # Step 2 — Get plan_id from session
+        plan_id = session_doc.get("plan_id")
+        if not plan_id:
+            print(f"[Pipeline] ❌ No plan_id on session: {session_id}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=200, content={
+                "error": "NO_PLAN",
+                "message": "Session is not linked to a learning plan."
+            })
+
+        print(f"[Pipeline] ✅ plan_id resolved: {plan_id}")
+
+        # Step 3 — Look up plan and extract collection_id
+        plan_doc = db.learning_plans.find_one({"_id": plan_id})
+        if not plan_doc:
+            print(f"[Pipeline] ❌ Plan not found: {plan_id}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=200, content={
+                "error": "NO_PLAN",
+                "message": "Learning plan not found."
+            })
+
+        # Fallback: check both nested and top-level locations
+        resolved_collection_id = (
+            plan_doc.get("system_metadata", {}).get("collection_id")
+            or plan_doc.get("collection_id")
+        )
+
+        if resolved_collection_id:
+            print(f"[Pipeline] ✅ collection_id resolved: {resolved_collection_id}")
+        else:
+            print(f"[Pipeline] ❌ NO_COLLECTION for plan: {plan_id}")
+
+    except Exception as e:
+        print(f"[Pipeline] ⚠️ Resolution chain failed: {e}")
+
+    if not resolved_collection_id:
+        print(f"[Pipeline] ❌ NO_COLLECTION error for {student_id}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=200,
+            content={
+                "error": "NO_COLLECTION",
+                "message": "Study materials not yet processed. Please re-upload your files."
+            }
+        )
+
+
     # Use real topic if provided, else fallback to mock default
     if req.topic_title:
         query = f"I want to learn about {req.topic_title}"
@@ -548,12 +831,16 @@ async def run_simulation(req: ScenarioRequest):
         cv_state = "bored"
         
     # Inject real content into context if available
-    context_data = {"test_cv_state": cv_state}
+    context_data = {
+        "test_cv_state": cv_state,
+        "collection_id": resolved_collection_id # Phase 21: RAG Isolation
+    }
     if req.topic_content:
         context_data["topic_content"] = req.topic_content
         
+    start_time = time.time()
     initial_state: AgentState = {
-        "student_id": "alex_123",
+        "student_id": student_id,
         "user_query": query,
         "context_data": context_data,
         "profile": None,
@@ -569,7 +856,9 @@ async def run_simulation(req: ScenarioRequest):
         "stop_early": False,
         "selected_strategy_label": None,
         "interaction_outcome": None,
-        "interaction_id": req.synthesis_id
+        "interaction_id": req.synthesis_id,
+        "start_time": start_time,
+        "last_phase_time": start_time
     }
     
     # Run Agent
@@ -582,6 +871,18 @@ async def run_simulation(req: ScenarioRequest):
             agent.ainvoke(initial_state, config={"recursion_limit": 20}),
             timeout=180.0
         )
+        
+        total_duration = int((time.time() - start_time) * 1000)
+        print(f"[EduSynth Timing] TOTAL duration_ms={total_duration}")
+        
+        # --- ISSUE 6: Emit final delivery_complete event ---
+        await sio.emit("progress", {
+            "synthesis_id": req.synthesis_id,
+            "phase": "delivery_complete",
+            "message": "Lesson ready",
+            "elapsed_ms": total_duration
+        }, room=student_id)
+
         return transform_state_to_graph(final_state)
     except asyncio.TimeoutError:
         print(">>> Timeout Error: ToT Simulation exceeded 90s.")
@@ -624,21 +925,25 @@ async def run_simulation(req: ScenarioRequest):
         active_student_synthesis.discard(student_id)
 
 @fastapi_app.post("/api/goal_decompose")
-async def goal_decompose(req: DecomposeRequest):
-    print(f"Decomposing goal: {req.goal}")
+async def goal_decompose(req: DecomposeRequest, user_id: str = Depends(get_current_user)):
+    print(f"Decomposing goal: {req.goal} (Collection: {req.collection_id}) for User: {user_id}")
     try:
-        result = decompose_goal(req.goal)
+        result = decompose_goal(req.goal, req.collection_id, user_id)
         return result
     except Exception as e:
         print(f"Decomposition Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @fastapi_app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...), 
+    collection_id: Optional[str] = Query(None),
+    plan_id: Optional[str] = Query(None) # Issue 1: Write back to plan
+):
     """
     Ingests PDF, DOCX, PPTX, or TXT into the Local VectorDB.
     """
-    print(f"Received upload: {file.filename}")
+    print(f"Received upload: {file.filename} (Collection: {collection_id}, Plan: {plan_id})")
     try:
         allowed_extensions = {".pdf", ".docx", ".pptx", ".txt"}
         ext = os.path.splitext(file.filename)[1].lower()
@@ -646,7 +951,7 @@ async def upload_file(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}. Allowed: {', '.join(allowed_extensions)}")
             
         content = await file.read()
-        result = await ingest_document(content, file.filename)
+        result = await ingest_document(content, file.filename, collection_id, plan_id)
         return result
     except Exception as e:
         print(f"Upload failed: {e}")
@@ -688,7 +993,7 @@ async def download_summary(filename: str):
 
 # --- ANALYTICS ENDPOINTS ---
 @fastapi_app.get("/api/analytics/historical")
-async def get_historical_analytics(user_id: str = "alex_123"):
+async def get_historical_analytics(user_id: str = Depends(get_current_user)):
     """
     Fetches aggregated historical averages for CV and RL telemetry.
     """
@@ -696,6 +1001,9 @@ async def get_historical_analytics(user_id: str = "alex_123"):
         from agent_core.snapshot import _get_db
         from agent_core.schemas import RL_ACTION_MAP
         db = _get_db()
+        
+        if db is None:
+            return {"status": "offline", "error": "Database Connection Failed"}
         
         # 1. CV Aggregation (Last 24 hours)
         one_day_ago = datetime.now() - timedelta(days=1)
@@ -751,7 +1059,7 @@ async def get_historical_analytics(user_id: str = "alex_123"):
         print(f"Analytics Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 @fastapi_app.get("/api/analytics/latest")
-async def get_latest_telemetry(user_id: str = "alex_123"):
+async def get_latest_telemetry(user_id: str = Depends(get_current_user)):
     """
     Fetches the absolute latest CV and RL packets for the specified user.
     """
@@ -759,6 +1067,9 @@ async def get_latest_telemetry(user_id: str = "alex_123"):
         from agent_core.snapshot import _get_db
         from agent_core.schemas import RL_ACTION_MAP
         db = _get_db()
+        
+        if db is None:
+            return {"status": "offline", "error": "Database Connection Failed"}
         
         # 1. Latest CV
         latest_cv = db.StudentEngagement.find_one(
@@ -1041,17 +1352,50 @@ async def accept_shadow_intervention(req: AcceptShadowRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @fastapi_app.get("/api/analytics/profile/{student_id}")
-async def get_enhanced_analytics(student_id: str):
+async def get_enhanced_analytics(current_user: str = Depends(get_current_user)):
     """
     Project ID: 25-26J-130
     Modernized analytics for the Data Center.
     """
     try:
+        student_id = current_user
         from db.connection import get_db_connection, get_profiles_collection
         db = get_db_connection()
-        profiles = get_profiles_collection(db)
         
-        profile = profiles.find_one({"student_id": student_id}, {"_id": 0})
+        # Mock / Fallback Data if DB is offline
+        if db is None:
+            print(">>> [Analytics] MongoDB Offline. Using Mock Fallback.")
+            return {
+                "profile": {
+                    "primary_modality": "Visual",
+                    "scaffolding_bias": "+0.15",
+                    "radar_data": [
+                        {"subject": "Visual/Spatial", "value": 75},
+                        {"subject": "Textual", "value": 45},
+                        {"subject": "Interactive", "value": 60}
+                    ]
+                },
+                "affective": {
+                    "avg_engagement": 0.72,
+                    "engagement_trend": [],
+                    "emotions": [{"name": "Focused", "count": 10}, {"name": "Confused", "count": 2}]
+                },
+                "intervention": {
+                    "success_rate": 85,
+                    "recent_swaps": [],
+                    "policy_distribution": [
+                        {"name": "Simplify Explanation", "value": 12},
+                        {"name": "Provide Worked Example", "value": 8}
+                    ]
+                },
+                "mastery_data": [
+                    {"topic": "Dimensional Modelling", "score": 85, "status": "Expert", "source": "Mock Data"}
+                ]
+            }
+
+        profiles = get_profiles_collection(db)
+        profile = profiles.find_one({"student_id": student_id}, {"_id": 0}) if profiles is not None else None
+        
         if not profile:
             profile = {
                 "preferred_modality": {"visual": 0.33, "textual": 0.33, "interactive": 0.34},
@@ -1079,8 +1423,9 @@ async def get_enhanced_analytics(student_id: str):
         # 3. Rolling Engagement (Last 5 Minutes)
         now = datetime.now()
         five_mins_ago = now - timedelta(minutes=5)
+        # Note: StudentEngagement uses 'user_id' whereas other collections use 'student_id'
         telemetry = list(db.StudentEngagement.find(
-            {"student_id": student_id, "timestamp": {"$gte": five_mins_ago}},
+            {"user_id": student_id, "timestamp": {"$gte": five_mins_ago}},
             {"_id": 0, "engagement_score": 1, "timestamp": 1, "emotion": 1}
         ).sort("timestamp", 1))
 
@@ -1166,11 +1511,12 @@ async def get_enhanced_analytics(student_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @fastapi_app.get("/api/user/profile/{student_id}")
-async def get_user_profile(student_id: str):
+async def get_user_profile(current_user: str = Depends(get_current_user)):
     """
     Fetches student profile data.
     """
     try:
+        student_id = current_user
         from db.connection import get_db_connection, get_profiles_collection
         db = get_db_connection()
         profiles = get_profiles_collection(db)

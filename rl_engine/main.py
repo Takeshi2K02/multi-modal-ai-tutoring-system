@@ -7,31 +7,36 @@ from datetime import datetime
 
 BASE_DIR_RL = os.path.dirname(os.path.abspath(__file__))
 env = TutorEnv()
-engine = RLEngine(os.path.join(BASE_DIR_RL, "models/dqn_model"))
+engine = RLEngine(os.path.join(BASE_DIR_RL, "models/ppo_model"))
 
 # print(">>> RL Engine Live Stream Active [Looping every 5s]...")
 
-while True:
-    student_id = "alex_123"  # Target student for live monitoring
-    env.sync_with_db(student_id)
-    obs, _ = env.reset(student_id=student_id)
-    packet = engine.decide(obs)
+STUDENT_ID = os.getenv("STUDENT_ID", "test_user")
 
-    # print(f"[{datetime.now().strftime('%H:%M:%S')}] RL Decision: {packet['action_id']} for {student_id}")
-    log_decision(packet)
-
-    # Broadcast to Agentic AI Core (Live Telemetry Hub)
-    try:
-        import requests
-        requests.post("http://localhost:8000/api/telemetry/rl", json={
-            "user_id": student_id,
-            "action_id": packet["action_id"],
-            "confidence": packet["confidence"],
-            "reasoning": f"Live DQN inference loop. Sync active."
-        }, timeout=0.5)
-    except Exception as e:
-        # print(f"Telemetry Broadcast Error: {e}")
-        pass
+# DISABLED: Duplicate RL source. Primary RL decision is handled by PedagogicalAgent in integration/persistence.py.
+if False:
+    while True:
+        student_id = STUDENT_ID  # Target student for live monitoring
+        env.sync_with_db(student_id)
+        obs, _ = env.reset(student_id=student_id)
+        packet = engine.decide(obs)
     
-    time.sleep(3) # Faster loop for responsiveness
-
+        # print(f"[{datetime.now().strftime('%H:%M:%S')}] RL Decision: {packet['action_id']} for {student_id}")
+        log_decision(packet)
+    
+        # Broadcast to Agentic AI Core (Live Telemetry Hub)
+        try:
+            import requests
+            requests.post("http://localhost:8000/api/telemetry/rl", json={
+                "user_id": student_id,
+                "action_id": packet["action_id"],
+                "confidence": packet["confidence"],
+                "reasoning": f"Live DQN inference loop. Sync active."
+            }, timeout=0.5)
+        except Exception as e:
+            # print(f"Telemetry Broadcast Error: {e}")
+            print(f"[RL] Telemetry POST failed: {e}")
+        
+        time.sleep(3) # Faster loop for responsiveness
+    
+    

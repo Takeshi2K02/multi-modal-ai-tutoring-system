@@ -1,42 +1,44 @@
 import os
-import time
 import warnings
-from langchain_google_genai import ChatGoogleGenerativeAI
+import vertexai
+from google.cloud import aiplatform
+from langchain_google_vertexai import ChatVertexAI
 from dotenv import load_dotenv
 
-# Suppress LangChain noise
+# Project ID: 25-26J-130: Suppress ChatVertexAI deprecation warning
+# ChatVertexAI is required for our ADC-based service account authentication.
+warnings.filterwarnings("ignore", message="The class `ChatVertexAI` was deprecated")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
 
 load_dotenv()
 
 def get_llm():
     """
-    Factory function to return the configured LLM based on environment variables.
-    Supports Vertex AI and Google AI Studio (Gemini).
+    Factory function to return the configured LLM.
+    Uses ChatVertexAI from langchain-google-vertexai.
+    Maintains Vertex AI backend via ADC/Service Account.
     """
-    provider = os.getenv("LLM_PROVIDER", "gemini").lower()
+    project = os.getenv("GCP_PROJECT_ID")
+    location = os.getenv("GCP_LOCATION")
     
-    if provider == "vertexai":
-        project = os.getenv("VERTEX_PROJECT_ID", "edusynth-488911")
-        location = os.getenv("VERTEX_REGION", "us-central1")
-        
-        print(f"--- Using Vertex AI LLM: Gemini 2.5 Flash ({project}, {location}) ---")
-        from langchain_google_vertexai import ChatVertexAI
-        return ChatVertexAI(
-            model_name="gemini-2.5-flash",
-            project=project,
-            location=location,
-            temperature=0.7
-        )
+    if not project or not location:
+        # Fallback to hardcoded defaults if env vars are missing (Project ID: 25-26J-130)
+        project = project or "edusynth-488911"
+        location = location or "us-central1"
     
-    # Default to Gemini (AI Studio)
-    print("--- Using Cloud LLM: Google Gemini 2.5 Flash (AI Studio) ---")
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        print("WARNING: GOOGLE_API_KEY not found. Gemini calls may fail.")
-        
-    return ChatGoogleGenerativeAI(
+    # Initialize Vertex AI SDK as requested (Project ID: 25-26J-130)
+    vertexai.init(project=project, location=location)
+    aiplatform.init(project=project, location=location)
+    
+    # Log line as requested
+    print("--- Google Gemini 2.5 Flash (Vertex AI) ---")
+    
+    # Using ChatVertexAI as requested
+    # No api_key parameter — authentication must use ADC only
+    return ChatVertexAI(
         model="gemini-2.5-flash",
+        project=project,
+        location=location,
         temperature=0.7,
-        google_api_key=api_key
+        max_retries=3
     )

@@ -1,0 +1,212 @@
+### server.py Audit ###
+
+--- FastAPI App Initialization ---
+52: fastapi_app = FastAPI()
+68: app = ASGIApp(sio, fastapi_app)
+
+--- CORS/Middleware Setup ---
+73: fastapi_app.add_middleware(
+74:     CORSMiddleware,
+75:     allow_origins=["*"],
+76:     allow_credentials=True,
+77:     allow_methods=["*"],
+78:     allow_headers=["*"],
+79: )
+
+--- Existing Route List (Decorators Only) ---
+195: @fastapi_app.on_event("startup")
+200: @fastapi_app.on_event("shutdown")
+277: @fastapi_app.post("/api/session/progress")
+289: @fastapi_app.post("/api/performance/save")
+301: @fastapi_app.get("/api/lesson/content")
+311: @fastapi_app.post("/api/lesson/save_content")
+323: @fastapi_app.post("/api/lesson/sync_progress")
+335: @fastapi_app.post("/api/challenge/evaluate")
+399: @fastapi_app.post("/api/learning_plan/save")
+409: @fastapi_app.post("/api/session/create")
+423: @fastapi_app.get("/api/session/{session_id}")
+431: @fastapi_app.delete("/api/sessions/{session_id}")
+442: @fastapi_app.get("/api/sessions/student/{student_id}")
+535: @fastapi_app.post("/api/run_sim", response_model=GraphResponse)
+634: @fastapi_app.post("/api/goal_decompose")
+644: @fastapi_app.post("/api/upload")
+663: @fastapi_app.post("/api/analyze-anatomy")
+682: @fastapi_app.get("/api/download-summary/{filename}")
+698: @fastapi_app.get("/api/analytics/historical")
+764: @fastapi_app.get("/api/analytics/latest")
+842: @fastapi_app.post("/api/engagement/track")
+876: @fastapi_app.post("/api/telemetry/cv")
+892: @fastapi_app.post("/api/telemetry/rl")
+900: @fastapi_app.post("/api/user/feedback")
+997: @fastapi_app.post("/api/user/accept_shadow")
+1057: @fastapi_app.get("/api/analytics/profile/{student_id}")
+1215: @fastapi_app.get("/api/user/profile/{student_id}")
+1239: @fastapi_app.get("/health")
+
+
+### web-ui/src/App.jsx Audit ###
+
+--- Top 60 Lines ---
+1: import React, { useState, useEffect } from 'react';
+2: import { clsx } from 'clsx';
+3: import { io } from 'socket.io-client';
+4: import { motion, AnimatePresence } from 'framer-motion';
+5: import { LayoutDashboard, BookOpen, BrainCircuit, Upload, Layers, ChevronRight, ChevronLeft, User, Database, Camera, Bot } from 'lucide-react';
+6: import useSWR from 'swr';
+7: import { fetcher, API_BASE_URL } from './services/api';
+8: import TreeVisualizer from './components/Graph/TreeVisualizer';
+9: import ScenarioControls from './components/Sidebar/ScenarioControls';
+10: import StudentProfilePanel from './components/StudentProfilePanel';
+11: import SignalsPanel from './components/Graph/SignalsPanel';
+12: import LectureUpload from './pages/LectureUpload';
+13: import GoalDecomposition from './pages/GoalDecomposition';
+14: import CurriculumBrowser from './pages/CurriculumBrowser';
+15: import LessonView from './pages/LessonView';
+16: import SessionDashboard from './pages/SessionDashboard';
+17: import Navbar from './components/Navbar';
+18: 
+19: // import ContentGeneration from './pages/ContentGeneration'; // Replaced by LessonView
+20: import AdminMonitor from './components/AdminMonitor';
+21: import DataDashboard from './pages/DataDashboard';
+22: import AgentDebugger from './pages/AgentDebugger';
+23: import LearningLayout from './components/LearningLayout';
+24: import LiveAffectSensing from './components/LiveAffectSensing';
+25: import { ThemeProvider } from './context/ThemeContext';
+26: 
+27: const socket = io('http://localhost:8000');
+28: 
+29: function App() {
+30:   const [view, setView] = useState('decomposition'); // Default: 'decomposition'
+31:   const [activeSessionId, setActiveSessionId] = useState(null);
+32:   const [currentTopicContext, setCurrentTopicContext] = useState(null);
+33:   const [isLessonReady, setIsLessonReady] = useState(false);
+34:   const [contentGenRequest, setContentGenRequest] = useState(null); // New State
+35:   const [countdown, setCountdown] = useState(0); // New State
+36:   const [preGeneratedContent, setPreGeneratedContent] = useState(null); // PHASE 4: Direct Handoff
+37: 
+38:   // Dynamic Title
+39:   useEffect(() => {
+40:     const titles = {
+41:       decomposition: 'EduSynth - Plan',
+42:       curriculum: 'EduSynth - Curriculum',
+43:       lesson: 'EduSynth - Lesson',
+44:       dashboard: 'EduSynth - My Learning',
+45:       agent: 'EduSynth - Agent View',
+46:       upload: 'EduSynth - Upload',
+47:       monitor: 'EduSynth - Admin Monitor',
+48:       data: 'EduSynth - Data Center',
+49:       agent: 'EduSynth - Agent Debugger'
+50:     };
+51:     document.title = titles[view] || 'EduSynth AI Tutor';
+52:   }, [view]);
+53: 
+54:   // Agent State
+55:   const [graphData, setGraphData] = useState(null);
+56:   const [outcome, setOutcome] = useState(null);
+57:   const [loading, setLoading] = useState(false);
+58:   const [error, setError] = useState(null);
+59: 
+60:   // UI Toggle State
+
+--- Lines Containing userId ---
+333:           userId="alex_123"
+
+
+### db/connection.py Audit ###
+1: import os
+2: import logging
+3: from pymongo import MongoClient
+4: from dotenv import load_dotenv
+5: 
+6: load_dotenv()
+7: 
+8: import certifi
+9: 
+10: # Use the URI from the prompt as default, but allow env var override
+11: MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://admin:admin@cluster0.ngps8t9.mongodb.net/?appName=Cluster0")
+12: 
+13: def get_db_connection():
+14:     """
+15:     Establishes a connection to MongoDB.
+16:     Returns the database object.
+17:     """
+18:     try:
+19:         # tlsCAFile=certifi.where() fixes SSL certificate verify failed on Mac
+20:         client = MongoClient(
+21:             MONGO_URI, 
+22:             tlsCAFile=certifi.where(),
+23:             serverSelectionTimeoutMS=5000
+24:         )
+25:         # Verify connection
+26:         client.admin.command('ping')
+27:         # Project ID: 25-26J-130: Clean Logging - Suppress success ping
+28:         logging.getLogger('pymongo').setLevel(logging.CRITICAL)
+29:         return client.get_database("edusynth_db")
+30:     except Exception as e:
+31:         print(f"Error connecting to MongoDB: {e}")
+32:         # In a real app, we might raise e, but for this starter template / mock mode, 
+33:         # we might want to handle it gracefully if using mocks only.
+34:         return None
+35: 
+36: def get_students_collection(db):
+37:     if db is not None:
+38:         return db["students"]
+39:     return None
+40: 
+41: def get_interactions_collection(db):
+42:     if db is not None:
+43:         return db["interactions"]
+44:     return None
+45: 
+46: def get_profiles_collection(db):
+47:     if db is not None:
+48:         return db["student_profiles"]
+49:     return None
+
+
+### db/schemas.py Audit ###
+1: from typing import List, Optional, Dict, Any, TypedDict
+2: from pydantic import BaseModel, Field
+3: from datetime import datetime
+4: 
+5: class LearningGoal(BaseModel):
+6:     topic: str
+7:     difficulty: str = "intermediate"
+8:     objectives: List[str] = []
+9: 
+10: class StudentProfile(BaseModel):
+11:     student_id: str
+12:     name: str
+13:     age: int
+14:     learning_style: str  # e.g., "visual", "auditory", "kinesthetic"
+15:     interests: List[str]
+16:     current_knowledge_level: Dict[str, str] = {} # topic -> level
+17: 
+18: class InteractionLog(BaseModel):
+19:     timestamp: datetime = Field(default_factory=datetime.now)
+20:     student_id: str
+21:     goal_id: str
+22:     chosen_strategy: str
+23:     scores: Dict[str, float]
+24:     cv_state: str
+25:     rl_hint: str
+26:     response_text: str
+27:     estimated_reading_time: int = 120 # Default 2 minutes
+28:     is_completed: bool = False
+29: 
+30: class AgentState(TypedDict):
+31:     # Inputs
+32:     student_id: str
+33:     user_query: str
+34:     
+35:     # Internal State
+36:     profile: Optional[Dict]
+37:     context_data: Optional[Dict] # CV, RL, Memory
+38:     candidate_strategies: List[str]
+39:     strategy_scores: Dict[str, float]
+40:     selected_strategy_label: Optional[str]
+41:     retries: int
+42:     
+43:     # Output
+44:     final_response: Optional[str]
+45:     reasoning_trace: List[str]

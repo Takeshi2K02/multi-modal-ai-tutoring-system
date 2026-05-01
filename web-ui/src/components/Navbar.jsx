@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BrainCircuit, Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap, Upload, Activity, Database } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
+import { logout } from '../services/api';
 
 const Navbar = ({ onViewChange, currentView }) => {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -67,6 +68,27 @@ const Navbar = ({ onViewChange, currentView }) => {
                 <div className="px-2">
                     <ThemeToggle />
                 </div>
+
+                <div className="h-4 w-[1px] bg-edu-border-light dark:bg-white/10 mx-1" />
+
+                {localStorage.getItem('token') ? (
+                    <button
+                        onClick={() => {
+                            logout();
+                            window.location.reload();
+                        }}
+                        className="px-4 py-2 text-[13px] font-medium text-red-500 hover:text-red-400 transition-colors"
+                    >
+                        Logout
+                    </button>
+                ) : (
+                    <button
+                        onClick={() => onViewChange('login')}
+                        className="px-4 py-2 text-[13px] font-medium text-primary hover:text-primary/80 transition-colors"
+                    >
+                        Login
+                    </button>
+                )}
 
                 {/* Mobile Menu Toggle (Simplified for context) */}
                 <div className="md:hidden flex items-center px-2">

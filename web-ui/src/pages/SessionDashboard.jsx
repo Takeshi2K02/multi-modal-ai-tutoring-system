@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useSWR from 'swr';
 import { getStudentSessions, deleteSession, fetcher, API_BASE_URL } from '../services/api';
 import { Trash2, BookOpen, Clock, ArrowRight, Layers, Sparkles } from 'lucide-react';
+import { useAuth } from "../AuthContext";
 import SkeletonCard from '../components/Skeletons/SkeletonCard';
 
 /**
@@ -15,8 +16,9 @@ import SkeletonCard from '../components/Skeletons/SkeletonCard';
  * 3. High-Contrast Progress: Uses vibrant gradients (Indigo -> Purple) against a deep black canvas.
  */
 const SessionDashboard = ({ onBack, onResume }) => {
-    const { data, error, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/alex_123`, fetcher);
-    const { data: profile } = useSWR(`${API_BASE_URL}/api/user/profile/alex_123`, fetcher);
+    const { userId } = useAuth();
+    const { data, error, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/${userId}`, fetcher);
+    const { data: profile } = useSWR(`${API_BASE_URL}/api/user/profile/${userId}`, fetcher);
 
     const sessions = data?.sessions || [];
     const historicalMastery = profile?.historical_mastery || {};

@@ -6,29 +6,46 @@ from mocks.data_generators import get_mock_student_profile
 class MemoryManager:
     def __init__(self):
         self.db = get_db_connection()
-        from db.connection import get_profiles_collection
+        from db.connection import get_profiles_collection, get_users_collection, get_students_collection
         self.profiles = get_profiles_collection(self.db)
+        self.users = get_users_collection(self.db)
+        self.students = get_students_collection(self.db) # For strategy weights
         self.interactions = get_interactions_collection(self.db)
 
     def get_student_profile(self, student_id: str) -> Dict[str, Any]:
         """
         Retrieves student profile from DB. 
-        Falls back to mock if not found or DB unavailable.
-        Ensures 'preferred_modality' field exists.
+        Identifier is email in the 'users' collection (Project ID: 25-26J-130)
         """
-        profile = None
-        if self.profiles is not None:
-            profile = self.profiles.find_one({"student_id": student_id})
-            if profile and "_id" in profile:
-                del profile["_id"]
+        user_doc = None
+        if self.users is not None:
+            user_doc = self.users.find_one({"email": student_id})
         
-        if not profile:
-            print(f"Memory: Student {student_id} not found in DB. Using mock.")
-            profile = get_mock_student_profile(student_id, randomized=False)
+        if not user_doc:
+            # Fallback to profiles if not found in users (for backward compatibility)
+            if self.profiles is not None:
+                user_doc = self.profiles.find_one({"student_id": student_id})
+        
+        if not user_doc:
+            raise RuntimeError(f"CRITICAL: Student {student_id} not found in DB. Agentic Core cannot initialize without a valid profile.")
 
-        # Ensure preferred_modality exists (Project ID: 25-26J-130)
+        # Flatten the user document
+        profile = {k: v for k, v in user_doc.items() if k != "_id"}
+        
+        # Merge learning_profile into top level if it exists (Project ID: 25-26J-130)
+        learning_profile = profile.get("learning_profile", {})
+        if learning_profile:
+            profile.update(learning_profile)
+
+        # Map preferred_learning_style to preferred_modality if missing
         if "preferred_modality" not in profile:
-            profile["preferred_modality"] = {"visual": 0.33, "textual": 0.33, "interactive": 0.34}
+            style = profile.get("preferred_learning_style", "textual").lower()
+            if style == "visual":
+                profile["preferred_modality"] = {"visual": 0.6, "textual": 0.2, "interactive": 0.2}
+            elif style == "interactive" or style == "kinesthetic":
+                profile["preferred_modality"] = {"visual": 0.2, "textual": 0.2, "interactive": 0.6}
+            else: # Default to textual bias
+                profile["preferred_modality"] = {"visual": 0.2, "textual": 0.6, "interactive": 0.2}
         
         return profile
 

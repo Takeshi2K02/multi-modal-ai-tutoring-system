@@ -59,6 +59,6 @@ model.learn(total_timesteps=50000)   # ← longer training
 # Save Model
 # =====================
 os.makedirs("models", exist_ok=True)
-model.save("models/dqn_model")
+model.save("models/ppo_model")
 
 print("✅ Training complete — model saved.")

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { useAuth } from "../AuthContext";
 
 function cn(...inputs) {
     return twMerge(clsx(inputs));
@@ -18,6 +19,7 @@ const socket = io('http://localhost:8000');
 const CV_BACKEND = "http://localhost:8000";
 
 const AdminMonitor = () => {
+    const { userId } = useAuth();
     const [cvData, setCvData] = useState([]);
     const [rlData, setRlData] = useState(null);
     const [policyDistribution, setPolicyDistribution] = useState({});
@@ -105,7 +107,7 @@ const AdminMonitor = () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         frame: frame.split(',')[1], // Strip prefix
-                        user_id: "alex_123",
+                        user_id: userId,
                         material_id: "unit_1_calculus"
                     })
                 }).catch(e => console.warn("CV Backend Offline"));
