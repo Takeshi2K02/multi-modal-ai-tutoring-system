@@ -60,8 +60,8 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
     state_changed = (emotion != _last_cv_state["emotion"]) or (abs(engagement_score - _last_cv_state["score"]) > 0.3)
     heartbeat = (now - _last_cv_print_time) >= 30
 
-    if state_changed or heartbeat:
-        print(f"[CV] Engagement: {engagement_score:.2f} | Emotion: {emotion} {'(State Change)' if state_changed and not heartbeat else '(Heartbeat)'}")
+    if state_changed or (heartbeat and (engagement_score < 0.5 or engagement_score > 0.9)):
+        print(f"[CV] Engagement: {engagement_score:.2f} | Emotion: {emotion} {'(State Change)' if state_changed else '(Threshold Heartbeat)'}")
         _last_cv_print_time = now
         _last_cv_state = {"emotion": emotion, "score": engagement_score}
     
@@ -73,15 +73,20 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
     
     # --- RL BRIDGE: Trigger Policy Inference on Heartbeat (Project ID: 25-26J-130) ---
     try:
-        # 1. Fetch Student Profile for Context
+        # 1. Fetch Student Profile & Feedback Signal (Project ID: 25-26J-130)
         profile = db.student_profiles.find_one({"student_id": user_id}) or {}
+        latest_feedback = db.FeedbackSignals.find_one({"student_id": user_id}, sort=[("timestamp", -1)])
+        feedback_val = latest_feedback.get("signal") if latest_feedback else None
         
         # 2. Run Inference
         agent = PedagogicalAgent(user_id)
         # print(f"[Pipeline] 🧠 DQN Inference: Polling for optimal strategy for student state...")
-        distribution = agent.get_action_distribution(engagement_score, emotion, profile)
+        distribution = agent.get_action_distribution(engagement_score, emotion, profile, feedback_signal=feedback_val)
         decision = agent.select_action(distribution)
-        # print(f"[Pipeline] 🎯 DQN Result: Selected '{decision['policy_name']}' (Confidence: {decision['confidence']:.2f})")
+        
+        # Project ID: 25-26J-130: DQN Action & State Vector Snapshot
+        f_info = f" | fdbk={feedback_val}" if feedback_val is not None else ""
+        print(f"[DQN] State: eng={engagement_score:.2f}, emo={emotion}{f_info} | Action: {decision['policy_name']} (Conf: {decision['confidence']:.2f})")
         
         # 3. Emit Policy Update for Live Monitor
         await _emit_event("policy_update", {
@@ -121,9 +126,7 @@ async def push_rl_strategy(user_id: str, action_id: int, confidence: float, reas
     heartbeat = (now - _last_rl_print_time) >= 30
 
     if state_changed or heartbeat:
-        from agent_core.schemas import RL_ACTION_MAP
-        action_name = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown")
-        # print(f"[RL] Selected Action: {action_id} ({action_name}) | Conf: {confidence:.2f} {'(State Change)' if state_changed and not heartbeat else '(Heartbeat)'}")
+        # Internal persistence log suppressed; primary DQN log handled in push_cv_data bridge
         _last_rl_print_time = now
         _last_rl_action = action_id
     

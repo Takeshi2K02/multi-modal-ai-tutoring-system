@@ -1,88 +1,107 @@
-import chromadb
-import uuid
 import os
 from typing import List, Dict, Any
+from pinecone import Pinecone
+from sentence_transformers import SentenceTransformer
 from services.vector_interface import VectorDBInterface
 
-# Directory where ChromaDB will persist data
-PERSIST_DIR = os.path.join(os.getcwd(), "local_data", "vector_store")
-
-_CLIENT_INSTANCE = None
-
-class LocalVectorDB(VectorDBInterface):
+class PineconeVectorDB(VectorDBInterface):
+    """
+    Pinecone-backed Vector Database implementation.
+    Generates embeddings locally using all-MiniLM-L6-v2 (384-dim).
+    (Project ID: 25-26J-130)
+    """
     def __init__(self):
-        global _CLIENT_INSTANCE
-        if _CLIENT_INSTANCE is None:
-            print(f"Initializing LocalVectorDB Client at {PERSIST_DIR}")
-            _CLIENT_INSTANCE = chromadb.PersistentClient(path=PERSIST_DIR)
+        self.api_key = os.getenv("PINECONE_API_KEY")
+        self.host = os.getenv("PINECONE_HOST")
+        self.index_name = os.getenv("PINECONE_INDEX_NAME")
         
-        self.client = _CLIENT_INSTANCE
+        if not self.api_key or not self.host:
+            print("[VectorDB] ⚠️ Pinecone credentials missing. Ensure .env is configured.")
+            
+        self.pc = Pinecone(api_key=self.api_key)
+        self.index = self.pc.Index(host=self.host)
         
-        # Create or get collection
-        self.collection = self.client.get_or_create_collection(
-            name="lectures",
-            metadata={"hnsw:space": "cosine"}
-        )
+        # Initialize local embedding model as requested
+        # Dimension: 384
+        print("[VectorDB] 🧠 Initializing local SentenceTransformer (all-MiniLM-L6-v2)...")
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
 
     def search(self, query: str, top_k: int = 10, filter: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        print(f"[VectorDB] Searching for: '{query}' with filter: {filter}")
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            where=filter
-        )
-        print(f"[VectorDB] Found {len(results['ids'][0]) if results['ids'] else 0} results.")
+        """
+        Search for relevant documents in Pinecone.
+        """
+        print(f"[VectorDB] Searching Pinecone for: '{query}' with filter: {filter}")
         
-        # Transform to standard format
-        # Chroma returns lists of lists (one per query)
+        # 1. Generate query embedding locally
+        query_vector = self.model.encode(query).tolist()
+        
+        # 2. Query Pinecone
+        try:
+            results = self.index.query(
+                vector=query_vector,
+                top_k=top_k,
+                filter=filter,
+                include_metadata=True
+            )
+        except Exception as e:
+            print(f"[VectorDB] ❌ Pinecone Query Failed: {e}")
+            return []
+        
+        print(f"[VectorDB] Found {len(results.get('matches', []))} results.")
+        
+        # 3. Transform to standard format
         output = []
-        if results["ids"]:
-            ids = results["ids"][0]
-            metadatas = results["metadatas"][0]
-            documents = results["documents"][0]
-            distances = results["distances"][0]
+        for match in results.get("matches", []):
+            meta = match.get("metadata", {})
+            source_id = meta.get("source_file") or meta.get("lecture_id") or "local"
             
-            for i in range(len(ids)):
-                # Chroma uses 'distance', we want 'score' (similiarity)
-                # For cosine distance: score = 1 - distance
-                score = 1.0 - distances[i]
-                
-                meta = metadatas[i] or {}
-                
-                # Standardize return format matching MockVectorDB
-                source_id = meta.get("source_file") or meta.get("lecture_id") or meta.get("filename") or "local"
-                doc = {
-                    "id": ids[i],
-                    "title": meta.get("lecture_title", "Unknown Title"),
-                    "text": documents[i],
-                    "score": round(score, 3),
-                    "metadata": {
-                        "source": source_id,
-                        "lecture_id": source_id,
-                        "page": meta.get("page_number"),
-                        "lecture_title": meta.get("lecture_title"),
-                        "week": 0
-                    }
+            output.append({
+                "id": match["id"],
+                "title": meta.get("lecture_title", "Unknown Title"),
+                "text": meta.get("text", ""), # Retrieved from metadata
+                "score": round(match["score"], 3),
+                "metadata": {
+                    "source": source_id,
+                    "lecture_id": source_id,
+                    "page": meta.get("page_number"),
+                    "lecture_title": meta.get("lecture_title"),
+                    "week": 0
                 }
-                output.append(doc)
-                
+            })
         return output
 
     def add_documents(self, documents: List[Dict[str, Any]]):
-        ids = [doc["id"] for doc in documents]
-        texts = [doc["text"] for doc in documents]
-        metadatas = [doc["metadata"] for doc in documents]
-        
-        self.collection.add(
-            documents=texts,
-            metadatas=metadatas,
-            ids=ids
-        )
-        print(f"LocalVectorDB: Added {len(documents)} documents.")
+        """
+        Generates embeddings locally and upserts to Pinecone.
+        """
+        vectors = []
+        for doc in documents:
+            # Generate embedding locally
+            embedding = self.model.encode(doc["text"]).tolist()
+            
+            # Prepare metadata
+            metadata = doc.get("metadata", {})
+            metadata["text"] = doc["text"] # Ensure text is stored for retrieval
+            
+            vectors.append({
+                "id": doc["id"],
+                "values": embedding,
+                "metadata": metadata
+            })
+            
+        # Batch upsert
+        try:
+            self.index.upsert(vectors=vectors)
+            print(f"[VectorDB] ✅ Pinecone: Upserted {len(documents)} documents.")
+        except Exception as e:
+            print(f"[VectorDB] ❌ Pinecone Upsert Failed: {e}")
 
     def delete_documents_by_source(self, source_filename: str):
         """
-        Deletes all chunks associated with a specific source file.
+        Deletes documents filtered by source filename.
         """
-        self.collection.delete(where={"source_file": source_filename})
-        print(f"LocalVectorDB: Deleted all documents from {source_filename}.")
+        try:
+            self.index.delete(filter={"source_file": source_filename})
+            print(f"[VectorDB] ✅ Pinecone: Deleted documents from {source_filename}.")
+        except Exception as e:
+            print(f"[VectorDB] ❌ Pinecone Delete Failed: {e}")

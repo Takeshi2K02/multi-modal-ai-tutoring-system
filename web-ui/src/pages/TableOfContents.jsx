@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { clsx } from 'clsx';
-import { motion } from 'framer-motion';
 
 const TOC = ({ data, onBack }) => {
     // data is the full result object from decomposeGoal

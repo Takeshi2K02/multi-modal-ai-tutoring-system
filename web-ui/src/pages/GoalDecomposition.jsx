@@ -13,7 +13,7 @@ import { decomposeGoal } from '../services/api';
  * 3. Neutral Palette: Using Zinc/Slate (950 to 400 range) creates a calm, professional environment.
  * 4. Micro-interactions: Subtle scale and opacity transitions provide feedback without distraction.
  */
-const GoalDecomposition = ({ onStart }) => {
+const GoalDecomposition = ({ onStart, collectionId }) => {
     const [goal, setGoal] = useState("");
     const [result, setResult] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -27,8 +27,8 @@ const GoalDecomposition = ({ onStart }) => {
         setError(null);
         setResult(null);
         try {
-            // Phase 21: RAG Isolation - Backend now resolves this from user session
-            const data = await decomposeGoal(goal);
+            // Phase 21: RAG Isolation - Pass the explicit collectionId from upload
+            const data = await decomposeGoal(goal, collectionId);
 
             // Inject collectionId into result so subsequent steps (AgentDebugger) can use it
             setResult({ ...data, collectionId: data.collectionId || null });
@@ -45,7 +45,14 @@ const GoalDecomposition = ({ onStart }) => {
         try {
             const { saveLearningPlan, createSession } = await import('../services/api');
             const studentId = localStorage.getItem('userId') || "student_001";
-            const saved = await saveLearningPlan(result);
+            
+            // Explicitly attach collection_id to plan data for direct persistence (No write-back)
+            const planData = {
+                ...result,
+                collection_id: collectionId || result.collectionId
+            };
+            
+            const saved = await saveLearningPlan(planData);
             const session = await createSession(saved.plan_id, studentId);
             onStart(session.session_id);
         } catch (e) {

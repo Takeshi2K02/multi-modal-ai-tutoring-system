@@ -46,6 +46,7 @@ class StudentStateSnapshot(BaseModel):
     confidence: float = 0.5       # From emotion_conf
     action_id: int = 0            # RL Action (0-8)
     intervention_needed: bool = False
+    feedback_signal: Optional[float] = None # Project ID: 25-26J-130: +1 or -1 from thumbs up/down
 
 class AgentState(TypedDict):
     # Inputs
@@ -84,3 +85,4 @@ class AgentState(TypedDict):
     current_modality: Optional[str]
     start_time: float # Project ID: 25-26J-130: Timing & Progress
     last_phase_time: float # Project ID: 25-26J-130
+    is_prefetch: bool # Phase 2: Background pre-generation

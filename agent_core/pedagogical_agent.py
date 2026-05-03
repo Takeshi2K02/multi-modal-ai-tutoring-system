@@ -1,5 +1,5 @@
 import random
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from agent_core.schemas import RL_ACTION_MAP
 
 class PedagogicalAgent:
@@ -13,7 +13,7 @@ class PedagogicalAgent:
         # Weights for each action_id (0-8)
         self.base_weights = {i: 0.1 for i in RL_ACTION_MAP.keys()}
 
-    def get_action_distribution(self, engagement_score: float, emotion: str, profile: Dict[str, Any]) -> Dict[str, float]:
+    def get_action_distribution(self, engagement_score: float, emotion: str, profile: Dict[str, Any], feedback_signal: Optional[float] = None) -> Dict[str, float]:
         """
         Calculates a real-time probability distribution across all pedagogical actions.
         Project ID: 25-26J-130
@@ -33,9 +33,9 @@ class PedagogicalAgent:
             weights[3] += 0.2
 
         # 2. Affect-Based Weighting
-        if engagement_score < 0.45 or emotion in ["bored", "distracted"]:
-            # Stagnation approaching -> Boost 'Simplify' (1), 'Switch Mode' (4), or 'Suggest Break' (5)
-            weights[1] += 0.3
+        if engagement_score < 0.45 or emotion in ["bored", "distracted"] or feedback_signal == -1.0:
+            # Stagnation approaching or negative feedback -> Boost 'Simplify' (1), 'Switch Mode' (4), or 'Suggest Break' (5)
+            weights[1] += 0.4 if feedback_signal == -1.0 else 0.3
             weights[4] += 0.2
             weights[5] += 0.1
             
@@ -44,10 +44,11 @@ class PedagogicalAgent:
             weights[1] += 0.4
             weights[7] += 0.3
             
-        elif engagement_score > 0.85 and emotion == "focused":
-            # High engagement -> Boost 'Increase Challenge' (6) and 'Prompt Reflection' (8)
+        elif (engagement_score > 0.85 and emotion == "focused") or feedback_signal == 1.0:
+            # High engagement or positive feedback -> Boost 'Increase Challenge' (6) and 'Prompt Reflection' (8)
             weights[6] += 0.2
             weights[8] += 0.2
+            weights[0] += 0.2 # Boost Maintain if feedback is positive
         else:
             # Baseline -> Maintain (0)
             weights[0] += 0.3
