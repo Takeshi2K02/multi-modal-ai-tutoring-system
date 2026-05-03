@@ -29,9 +29,14 @@ import {
     syncStudentProgress,
     handleUserFeedback,
     acceptShadowIntervention,
-    runSimulation
+    runSimulation,
+    manualPrefetch,
+    fetcher,
+    API_BASE_URL
 } from '../services/api';
 import { useAuth } from "../AuthContext";
+import useSWR from 'swr';
+import toast from 'react-hot-toast';
 
 const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
     const { userId } = useAuth();
@@ -252,9 +257,9 @@ const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, corr
 
 const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedContent }) => {
     const { userId } = useAuth();
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(!preGeneratedContent);
     const [content, setContent] = useState(null);
-    const [isThinking, setIsThinking] = useState(true);
+    const [isThinking, setIsThinking] = useState(!preGeneratedContent);
     const [selectedOption, setSelectedOption] = useState(null);
     const [isSubmitted, setIsSubmitted] = useState(false);
     const [isChallengeComplete, setIsChallengeComplete] = useState(false);
@@ -274,6 +279,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
     const [progressPhases, setProgressPhases] = useState([]);
     const [elapsedSeconds, setElapsedSeconds] = useState(0);
     const [isDeliveryComplete, setIsDeliveryComplete] = useState(false);
+    const [isFromCache, setIsFromCache] = useState(false); // Issue 3
 
     // Timer for loading feedback (Project ID: 25-26J-130)
     useEffect(() => {
@@ -313,9 +319,11 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                     console.log(">>> [LessonView] Initializing with Pre-Generated Content:", preGeneratedContent);
                     
                     // Correcting payload parsing: GraphResponse.meta.content.full_text (Issue Fix)
-                    const finalContent = preGeneratedContent.final_content || 
+                    const finalContent = preGeneratedContent.full_text || 
+                                       preGeneratedContent.final_content || 
                                        preGeneratedContent.meta?.content?.full_text || 
-                                       preGeneratedContent.meta?.body_text;
+                                       preGeneratedContent.meta?.body_text ||
+                                       preGeneratedContent.meta?.final_response;
                     
                     const modality = preGeneratedContent.current_modality || 
                                    (finalContent?.includes('[MERMAID_START]') ? 'VISUAL' : 'TEXTUAL');
@@ -326,8 +334,14 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                     };
                     
                     if (finalContent) {
+                        const resolvedInteractionId = preGeneratedContent.interaction_id || 
+                                                     preGeneratedContent.meta?.interaction_id || 
+                                                     preGeneratedContent.synthesis_id;
+
+                        console.log("[LessonView] interactionId resolved as:", resolvedInteractionId || "MISSING");
+
                         setContent(directive);
-                        setInteractionId(preGeneratedContent.interaction_id || preGeneratedContent.meta?.interaction_id);
+                        setInteractionId(resolvedInteractionId);
                         setStrategyLabel(preGeneratedContent.strategy || preGeneratedContent.meta?.strategy);
                         setRagSources(preGeneratedContent.rag_sources || preGeneratedContent.meta?.context_data?.rag_sources || []);
                         setCurrentModality(modality);
@@ -347,6 +361,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                 if (existing && (existing.content || existing.directive)) {
                     const savedDirective = existing.directive || existing.content;
                     setContent(savedDirective);
+                    setIsFromCache(true); // Issue 3
                     setIsThinking(false);
                     if (existing.user_response) setResponse(existing.user_response);
                     if (existing.ai_evaluation_score !== undefined) {
@@ -389,13 +404,22 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
 
                 const bestNodeId = result.meta?.best_path_ids?.[result.meta.best_path_ids.length - 1];
                 const bestNode = result.nodes?.find(n => n.id === bestNodeId);
+                const finalContent = result.meta?.content?.full_text || 
+                                     result.meta?.body_text || 
+                                     result.meta?.final_response || 
+                                     result.meta?.final_content || 
+                                     result.full_text;
+
                 const directive = bestNode?.data?.directive || {
                     type: "explanation",
-                    content: result.meta?.content?.full_text || result.meta?.body_text || result.meta?.final_response || "Complete."
+                    content: finalContent || (result.meta?.prefetched ? null : "Complete.")
                 };
 
-                setContent(directive);
+                if (directive.content) {
+                    setContent(directive);
+                }
                 setInteractionId(result.meta?.interaction_id);
+                setIsFromCache(!!result.meta?.from_cache); // Issue 3
                 setStrategyLabel(result.meta?.selected_strategy_label || result.meta?.strategy_label);
                 setRagSources(result.meta?.rag_sources || []);
                 setCurrentModality(result.meta?.current_modality || (directive?.content?.includes('graph TD') ? 'VISUAL' : 'TEXTUAL'));
@@ -433,7 +457,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
             sio.on('tot_final', (data) => {
                 console.log(">>> [ToT] Final Broadcast Recieved:", data);
                 setContent({
-                    content: data.full_text || "Content updated.",
+                    content: data.full_text || data.final_content || "Content updated.",
                     type: data.current_modality || "explanation"
                 });
                 if (data.interaction_id) setInteractionId(data.interaction_id);
@@ -448,9 +472,10 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
             });
 
             sio.on('synthesis_complete', (data) => {
-                if (data.full_text) {
+                const finalContent = data.full_text || data.final_content;
+                if (finalContent) {
                     setContent({
-                        content: data.full_text,
+                        content: finalContent,
                         type: data.current_modality || "explanation"
                     });
                 }
@@ -556,22 +581,33 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
         if (mermaidData && !isVisualReady) return false;
         if (content?.type === 'quiz') return isSubmitted;
         if (hasDesignChallenge) return isChallengeComplete;
-        return true;
-    }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady]);
+        
+        // Project ID: 25-26J-130: Require feedback for non-quiz content to enable RL signals
+        return !!feedbackSent;
+    }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady, feedbackSent]);
+
+    const { data: sessionData } = useSWR(
+        sessionId ? `${API_BASE_URL}/api/session/${sessionId}` : null,
+        fetcher
+    );
 
     const handleComplete = async () => {
         if (!sessionId || !topic || isCompleting) return;
         setIsCompleting(true);
         try {
+            console.log(`[Completion] 🏁 Marking topic "${topic.title}" as complete...`);
             await updateSessionProgress(sessionId, topic.title);
             const finalPayload = {
                 student_id: userId,
                 topic_id: topic.title,
                 content: content,
                 user_response: response,
-                ai_evaluation_score: score
+                ai_evaluation_score: score,
+                interaction_id: interactionId
             };
-            await saveLessonContent(finalPayload);
+            const result = await saveLessonContent(finalPayload);
+            console.log("[Completion] ✅ Synthesis saved to database:", result);
+            
             await syncStudentProgress(finalPayload);
             if (content?.type === 'quiz' && isSubmitted) {
                 await savePerformance({
@@ -583,31 +619,111 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                     correct_answers: selectedOption === content.quiz?.correct_index ? 1 : 0
                 });
             }
+
+            // Phase 2: Background Prefetch for Next Topic
+            if (sessionData?.plan?.curriculum?.structure) {
+                const structure = sessionData.plan.curriculum.structure;
+                const completedTopics = sessionData.session?.progress?.completed_topics || [];
+                
+                // Add current topic to local list for lookup
+                const currentCompleted = [...completedTopics, topic.title];
+                
+                let nextTopic = null;
+                let foundNext = false;
+                for (const lecture of structure) {
+                    for (const t of (lecture.children || [])) {
+                        if (!currentCompleted.includes(t.title)) {
+                            nextTopic = t;
+                            foundNext = true;
+                            break;
+                        }
+                    }
+                    if (foundNext) break;
+                }
+
+                if (nextTopic) {
+                    console.log(`[Prefetch] 🚀 Triggering manual prefetch for: ${nextTopic.title}`);
+                    const colId = sessionData.plan.system_metadata?.collection_id || sessionData.plan.collection_id;
+                    manualPrefetch({
+                        session_id: sessionId,
+                        topic_title: nextTopic.title,
+                        student_id: userId,
+                        collection_id: colId
+                    }).catch(err => console.error("[Prefetch] Manual trigger failed:", err));
+                }
+            }
+
             onBack();
         } catch (err) {
             console.error("Completion Error:", err);
+            toast.error("Failed to synchronize completion. Please try again.");
         } finally {
             setIsCompleting(false);
         }
     };
 
     const handleFeedback = async (sentiment) => {
-        if (!interactionId || feedbackSent) return;
+        if (feedbackSent) return;
+        
+        // Immediate UI update to unlock completion button
         setFeedbackSent(sentiment ? 'up' : 'down');
+        
+        if (!interactionId) {
+            console.warn("[LessonView] Feedback triggered but interactionId is missing. Using fallback identifier for telemetry.");
+        }
+        
+        const feedbackToast = toast.loading("Sending feedback...");
+        
         try {
-            const modality = (content?.type === 'visual_explanation' || sanitizedContent.includes('graph TD')) ? 'visual' : 'textual';
-            await handleUserFeedback({
+            const modality = (content?.type === 'visual_explanation' || (content?.content && content.content.includes('graph TD'))) ? 'visual' : 'textual';
+            
+            // Use fallback if interactionId is missing to prevent API failure or silent blocks
+            const targetInteractionId = interactionId || topic?.title || sessionId || "fallback_id";
+            
+            console.log(`[Feedback] 📡 Sending ${sentiment ? 'positive' : 'negative'} signal for: ${targetInteractionId}`);
+            
+            const response = await handleUserFeedback({
                 student_id: userId,
-                interaction_id: interactionId,
+                interaction_id: targetInteractionId,
                 action_type: strategyLabel || "SIMPLIFY_EXPLANATION",
                 sentiment: sentiment,
                 modality_type: modality,
                 topic_id: topic?.title
             });
+            
+            console.log("[Feedback] ✅ Signal received by RL Engine:", response);
+            toast.success("Feedback recorded! Adapting profile...", { id: feedbackToast });
         } catch (err) {
             console.error("Feedback error:", err);
+            toast.error("Couldn't save feedback. But you can still continue.", { id: feedbackToast });
+            // Don't reset state so user isn't stuck, but they know it failed
         }
     };
+
+    const thumbsUpClass = clsx(
+        "p-4 rounded-full border transition-all duration-300", 
+        feedbackSent === 'up' 
+            ? "bg-secondary border-secondary text-white shadow-xl shadow-secondary/40 scale-110" 
+            : feedbackSent 
+                ? "opacity-20 grayscale cursor-not-allowed" 
+                : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50 hover:scale-110 active:scale-95"
+    );
+
+    const thumbsDownClass = clsx(
+        "p-4 rounded-full border transition-all duration-300", 
+        feedbackSent === 'down' 
+            ? "bg-danger border-danger text-white shadow-xl shadow-danger/40 scale-110" 
+            : feedbackSent 
+                ? "opacity-20 grayscale cursor-not-allowed" 
+                : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50 hover:scale-110 active:scale-95"
+    );
+
+    const completeButtonClass = clsx(
+        "w-full py-6 rounded-full font-black text-xs uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-4 shadow-2xl",
+        isReadyToComplete 
+            ? "bg-secondary text-white shadow-secondary/30 hover:scale-[1.02] active:scale-95" 
+            : "bg-white/5 text-zinc-600 cursor-not-allowed opacity-50 border border-white/5"
+    );
 
     if (error) return (
         <div className="h-full flex flex-col items-center justify-center p-10 text-center gap-6">
@@ -633,92 +749,22 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                 </header>
 
                 <main className="flex-1 space-y-12 pb-24">
-                    {(isThinking || !isContentViewable) ? (
-                        <div className="h-[70vh] flex flex-col items-center justify-center p-8 bg-white/40 dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[48px] backdrop-blur-3xl shadow-sm transition-all overflow-hidden relative">
-                            {/* Animated Background Mesh */}
-                            <div className="absolute inset-0 opacity-10 pointer-events-none">
-                                <div className="absolute top-1/4 left-1/4 w-64 h-64 bg-primary rounded-full filter blur-[120px] animate-pulse" />
-                                <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-secondary rounded-full filter blur-[120px] animate-pulse" style={{ animationDelay: '1s' }} />
-                            </div>
-
-                            <div className="relative z-10 w-full max-w-md flex flex-col items-center gap-12">
-                                {/* Large Central Spinner */}
-                                <div className="relative">
-                                    <div className="w-24 h-24 border-[3px] border-primary/10 border-t-primary rounded-full animate-spin" />
-                                    <div className="absolute inset-0 flex items-center justify-center">
-                                        <BrainCircuit size={32} className="text-primary animate-pulse" />
-                                    </div>
-                                    <div className="absolute -bottom-2 -right-2 bg-zinc-900 border border-white/10 px-3 py-1 rounded-full shadow-xl">
-                                        <span className="text-[10px] font-mono text-zinc-400">{elapsedSeconds}s</span>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-8 w-full">
-                                    <div className="text-center space-y-2">
-                                        <h3 className="text-sm font-black uppercase tracking-[0.3em] text-primary">Synthesizing Module</h3>
-                                        <div className="text-zinc-500 dark:text-slate-500 text-xs font-light flex justify-center gap-1">
-                                            Crafting a personalized cognitive path for 
-                                            <ReactMarkdown 
-                                                components={{
-                                                    p: ({children}) => <span className="font-bold text-zinc-400">{children}</span>,
-                                                    strong: ({children}) => <span className="font-bold text-zinc-400">{children}</span>
-                                                }}
-                                            >
-                                                {`**${topic?.title}**`}
-                                            </ReactMarkdown>
-                                        </div>
-                                    </div>
-
-                                    {/* Progress Steps */}
-                                    <div className="space-y-4">
-                                        {[
-                                            { id: 'rag_complete', label: 'Knowledge Retrieval', msg: 'Searching vector database...' },
-                                            { id: 'tot_complete', label: 'Strategy Selection', msg: 'Identifying optimal teaching path...' },
-                                            { id: 'synthesis_complete', label: 'Lesson Synthesis', msg: 'Expanding reasoning into content...' }
-                                        ].map((phase, idx) => {
-                                            const isDone = progressPhases.some(p => p.phase === phase.id);
-                                            const isCurrent = !isDone && (idx === 0 || progressPhases.some(p => p.phase === ['rag_complete', 'tot_complete'][idx-1]));
-                                            
-                                            return (
-                                                <div key={phase.id} className={clsx(
-                                                    "flex items-center gap-4 p-4 rounded-3xl border transition-all duration-500",
-                                                    isDone ? "bg-secondary/10 border-secondary/20 opacity-100" : 
-                                                    isCurrent ? "bg-primary/5 border-primary/20 opacity-100 scale-[1.02] shadow-lg" : 
-                                                    "bg-white/5 border-transparent opacity-30"
-                                                )}>
-                                                    <div className={clsx(
-                                                        "w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold transition-all",
-                                                        isDone ? "bg-secondary text-white" : isCurrent ? "bg-primary text-white animate-pulse" : "bg-zinc-800 text-zinc-500"
-                                                    )}>
-                                                        {isDone ? <CheckCircle2 size={16} /> : idx + 1}
-                                                    </div>
-                                                    <div className="flex-1">
-                                                        <p className={clsx("text-xs font-bold", isDone ? "text-secondary" : isCurrent ? "text-primary" : "text-zinc-500")}>{phase.label}</p>
-                                                        <p className="text-[10px] text-zinc-500 font-light truncate">
-                                                            {isDone ? "Completed" : isCurrent ? phase.msg : "Waiting..."}
-                                                        </p>
-                                                    </div>
-                                                    {isDone && (
-                                                        <span className="text-[10px] font-mono text-secondary/60">
-                                                            {((progressPhases.find(p => p.phase === phase.id)?.elapsed_ms || 0) / 1000).toFixed(1)}s
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center gap-2 text-[9px] font-black uppercase tracking-widest text-zinc-600 animate-pulse">
-                                    <Sparkles size={10} />
-                                    <span>AI Orchestration in Progress</span>
-                                </div>
-                            </div>
+                    {!isContentViewable ? (
+                        <div className="h-[40vh] flex flex-col items-center justify-center p-8 bg-white/40 dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[48px] backdrop-blur-3xl shadow-sm transition-all overflow-hidden relative">
+                             <div className="w-10 h-10 border-[3px] border-primary/10 border-t-primary rounded-full animate-spin" />
+                             <p className="mt-4 text-[10px] font-black uppercase tracking-widest text-primary animate-pulse">Initializing Cognitive Path...</p>
                         </div>
                     ) : (
                         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-12">
                             <div className="space-y-4">
-                                <h2 className="text-4xl lg:text-5xl font-light text-edu-text-light dark:text-white tracking-tight">{topic?.title}</h2>
+                                <div className="flex items-center gap-4">
+                                    <h2 className="text-4xl lg:text-5xl font-light text-edu-text-light dark:text-white tracking-tight">{topic?.title}</h2>
+                                    {isFromCache && (
+                                        <span className="px-3 py-1 bg-secondary/20 border border-secondary/30 text-secondary text-[10px] font-black uppercase tracking-widest rounded-full">
+                                            Previously Completed
+                                        </span>
+                                    )}
+                                </div>
                                 <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 dark:text-slate-500 tracking-wide">
                                     <span className="flex items-center gap-1.5"><Gamepad2 size={14} /> {strategyLabel?.replace(/_/g, ' ') || 'INTERACTIVE NODE'}</span>
                                     <span className="w-1 h-1 rounded-full bg-zinc-200 dark:bg-white/10" />
@@ -789,19 +835,40 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                                 <div className="flex flex-col items-center gap-4">
                                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">How was this explanation?</p>
                                     <div className="flex items-center gap-6">
-                                        <button onClick={() => handleFeedback(true)} disabled={feedbackSent} className={clsx("p-4 rounded-full border transition-all hover:scale-110 active:scale-95", feedbackSent === 'up' ? "bg-secondary/20 border-secondary text-secondary" : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50")}><ThumbsUp size={20} /></button>
-                                        <button onClick={() => handleFeedback(false)} disabled={feedbackSent} className={clsx("p-4 rounded-full border transition-all hover:scale-110 active:scale-95", feedbackSent === 'down' ? "bg-danger/20 border-danger text-danger" : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50")}><ThumbsDown size={20} /></button>
+                                        <button 
+                                            onClick={() => { console.log("Feedback Up Clicked"); handleFeedback(true); }} 
+                                            disabled={feedbackSent} 
+                                            className={thumbsUpClass}
+                                        >
+                                            <ThumbsUp size={20} fill={feedbackSent === 'up' ? "currentColor" : "none"} />
+                                        </button>
+                                        <button 
+                                            onClick={() => { console.log("Feedback Down Clicked"); handleFeedback(false); }} 
+                                            disabled={feedbackSent} 
+                                            className={thumbsDownClass}
+                                        >
+                                            <ThumbsDown size={20} fill={feedbackSent === 'down' ? "currentColor" : "none"} />
+                                        </button>
                                     </div>
                                 </div>
 
-                                <AnimatePresence>
-                                    {isReadyToComplete && (
-                                        <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} onClick={handleComplete} disabled={isCompleting} className="group relative px-16 py-6 bg-secondary text-white font-black rounded-full shadow-2xl shadow-secondary/20 transition-all hover:scale-105 active:scale-95 flex items-center gap-3 overflow-hidden">
-                                            <span className="relative z-10 uppercase tracking-[0.3em] text-xs">{isCompleting ? 'Synchronizing...' : 'Complete Module'}</span>
-                                            <CheckCircle2 size={18} className="relative z-10" />
-                                        </motion.button>
+                                <div className="w-full max-w-md flex flex-col items-center gap-4">
+                                    <button 
+                                        onClick={handleComplete} 
+                                        disabled={isCompleting || !isReadyToComplete}
+                                        className={completeButtonClass}
+                                    >
+                                        {isCompleting ? 'Synchronizing State...' : 'Complete Module'}
+                                        <CheckCircle2 size={18} />
+                                    </button>
+                                    
+                                    {!feedbackSent && isContentViewable && (
+                                        <p className="text-[10px] font-medium text-zinc-500 animate-pulse">
+                                            Please rate this explanation to continue
+                                        </p>
                                     )}
-                                </AnimatePresence>
+                                </div>
+                            </div>
 
                                 {ragSources?.length > 0 && (
                                     <div className="mt-12 w-full pt-12 border-t border-edu-border-light dark:border-white/5">
@@ -820,7 +887,6 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                                         </div>
                                     </div>
                                 )}
-                            </div>
                         </motion.div>
                     )}
                 </main>

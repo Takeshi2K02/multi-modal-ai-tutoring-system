@@ -62,6 +62,13 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
         {"user_id": user_id}, 
         sort=[("timestamp", -1)]
     )
+    
+    # 3b. Fetch Latest Feedback Signal (Project ID: 25-26J-130)
+    latest_feedback = db.FeedbackSignals.find_one(
+        {"student_id": user_id},
+        sort=[("timestamp", -1)]
+    )
+    feedback_val = latest_feedback.get("signal") if latest_feedback else None
 
     # --- Cold Start Logic ---
     if not latest_cv:
@@ -148,5 +155,6 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
         intervention_needed=intervention_needed,
         mastery_level=latest_perf.get("mastery", 0.5) if latest_perf else 0.5,
         session_fatigue=session_fatigue,
-        confidence=latest_cv.get("emotion_conf", 0.5)
+        confidence=latest_cv.get("emotion_conf", 0.5),
+        feedback_signal=feedback_val
     )

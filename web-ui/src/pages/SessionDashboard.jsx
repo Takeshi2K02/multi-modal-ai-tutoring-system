@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { clsx } from 'clsx';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion'; // eslint-disable-line no-unused-vars
 import useSWR from 'swr';
-import { getStudentSessions, deleteSession, fetcher, API_BASE_URL } from '../services/api';
+import { deleteSession, fetcher, API_BASE_URL } from '../services/api';
 import { Trash2, BookOpen, Clock, ArrowRight, Layers, Sparkles } from 'lucide-react';
 import { useAuth } from "../AuthContext";
 import SkeletonCard from '../components/Skeletons/SkeletonCard';
@@ -17,7 +17,7 @@ import SkeletonCard from '../components/Skeletons/SkeletonCard';
  */
 const SessionDashboard = ({ onBack, onResume }) => {
     const { userId } = useAuth();
-    const { data, error, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/${userId}`, fetcher);
+    const { data, isLoading, mutate } = useSWR(`${API_BASE_URL}/api/sessions/student/${userId}`, fetcher);
     const { data: profile } = useSWR(`${API_BASE_URL}/api/user/profile/${userId}`, fetcher);
 
     const sessions = data?.sessions || [];

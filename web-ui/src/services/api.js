@@ -238,3 +238,13 @@ export const acceptShadowIntervention = async (shadowData) => {
         throw error;
     }
 };
+
+export const manualPrefetch = async (sessionData) => {
+    try {
+        const response = await axios.post(`${API_BASE_URL}/api/prefetch`, sessionData);
+        return response.data;
+    } catch (error) {
+        console.error("Manual Prefetch Error", error);
+        throw error;
+    }
+};

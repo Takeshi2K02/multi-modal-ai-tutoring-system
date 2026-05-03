@@ -1,4 +1,39 @@
-import sys
+import ast
+
+def rewrite_server():
+    with open("server.py", "r") as f:
+        source = f.read()
+        
+    lines = source.splitlines()
+    tree = ast.parse(source)
+    
+    # We want to KEEP:
+    # Everything up to check_infrastructure, monitor_interventions, startup/shutdown, health_check, and the main block.
+    # We ALSO want to KEEP the sio socket connection logic.
+    # Everything else gets stripped and replaced by include_router calls.
+    
+    keep_names = {
+        "cleanup_resources",
+        "EndpointFilter",
+        "connect",
+        "handle_join_room",
+        "check_infrastructure",
+        "monitor_interventions",
+        "startup_event",
+        "shutdown_event",
+        "health_check"
+    }
+    
+    keep_types = {
+        "Import",
+        "ImportFrom",
+    }
+    
+    # We will build a new file
+    output = []
+    
+    # Let's manually compose server.py to guarantee correctness
+    new_server = '''import sys
 import os
 import asyncio
 import time
@@ -17,11 +52,8 @@ os.environ['TQDM_DISABLE'] = '1'
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="langchain")
 warnings.filterwarnings("ignore", message=".*ChatVertexAI.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", message=".*inference_feedback_manager.*")
-warnings.filterwarnings("ignore", message=".*landmark_projection_calculator.*")
 
-for logger_name in ["transformers", "mediapipe", "absl", "google", "google_auth_httplib2", "tensorflow"]:
+for logger_name in ["transformers", "mediapipe", "absl", "google", "google_auth_httplib2"]:
     logging.getLogger(logger_name).setLevel(logging.ERROR)
 
 def cleanup_resources():
@@ -60,12 +92,10 @@ fastapi_app.add_middleware(
 
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return msg.find("/api/engagement/track") == -1 and \
-               msg.find("/api/telemetry/rl") == -1 and \
-               msg.find("/api/analytics/latest") == -1 and \
-               msg.find("/api/prefetch/status") == -1 and \
-               msg.find("/socket.io/") == -1
+        return record.getMessage().find("/api/engagement/track") == -1 and \\
+               record.getMessage().find("/api/telemetry/rl") == -1 and \\
+               record.getMessage().find("/api/analytics/latest") == -1 and \\
+               record.getMessage().find("/socket.io/") == -1
 
 logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
@@ -115,7 +145,7 @@ from db.connection import get_db_connection
 from services.vector_factory import get_vector_db
 
 def check_infrastructure():
-    print("\n[Startup] 🩺 Running Infrastructure Health Check...")
+    print("\\n[Startup] 🩺 Running Infrastructure Health Check...")
     try:
         db = get_db_connection()
         print(f"[Startup] ✅ MongoDB Connected: {db.name}")
@@ -128,7 +158,7 @@ def check_infrastructure():
     except Exception as e:
         print(f"[Startup] ❌ VectorDB Initialization Failed!")
         raise e
-    print("[Startup] 🚀 All systems green. Ready for requests.\n")
+    print("[Startup] 🚀 All systems green. Ready for requests.\\n")
 
 check_infrastructure()
 
@@ -250,3 +280,12 @@ fastapi_app.include_router(upload.router)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+'''
+    with open("server.py", "w") as f:
+        f.write(new_server)
+        
+    # Also create routers/__init__.py
+    open("routers/__init__.py", "w").close()
+
+if __name__ == "__main__":
+    rewrite_server()

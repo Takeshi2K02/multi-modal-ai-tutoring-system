@@ -26,7 +26,76 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
     );
 
     const [expandedLectures, setExpandedLectures] = useState({});
-    const [isStarting, setIsStarting] = useState(false);
+    const [isPrefetchReady, setIsPrefetchReady] = useState(false);
+    const [prefetchTimeout, setPrefetchTimeout] = useState(false);
+    const [pollActive, setPollActive] = useState(true);
+
+    const { session, plan } = sessionData || {};
+    const structure = plan?.curriculum?.structure || [];
+    const completedTopics = session?.progress?.completed_topics || [];
+    const masteryPercent = session?.progress?.percent_complete || 0;
+
+    const nextTopicToLearn = React.useMemo(() => {
+        let target = null;
+        for (const lecture of structure) {
+            for (const topic of (lecture.children || [])) {
+                if (!completedTopics.includes(topic.title)) {
+                    target = topic.title;
+                    break;
+                }
+            }
+            if (target) break;
+        }
+        return target;
+    }, [structure, completedTopics]);
+
+    // Fix 2: Start CV pipeline on module page entry
+    React.useEffect(() => {
+        console.log(">>> [CV] Module page mounted. Initializing pedagogical sensing...");
+        // Activation is handled by the global LiveAffectSensing in App.jsx
+    }, []);
+
+    // Task 2: Poll for prefetch readiness
+    React.useEffect(() => {
+        if (!nextTopicToLearn || !pollActive || !sessionId) return;
+        
+        let elapsed = 0;
+        const intervalId = setInterval(async () => {
+            elapsed += 2;
+            if (elapsed >= 60) {
+                setPrefetchTimeout(true);
+                setPollActive(false);
+                clearInterval(intervalId);
+                return;
+            }
+            
+            try {
+                const url = `${API_BASE_URL}/api/prefetch/status?session_id=${sessionId}&topic_id=${encodeURIComponent(nextTopicToLearn)}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.ready) {
+                    setIsPrefetchReady(true);
+                    setPollActive(false);
+                    clearInterval(intervalId);
+                }
+            } catch (err) {}
+        }, 2000);
+        
+        // Immediate check
+        (async () => {
+            try {
+                const url = `${API_BASE_URL}/api/prefetch/status?session_id=${sessionId}&topic_id=${encodeURIComponent(nextTopicToLearn)}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data.ready) {
+                    setIsPrefetchReady(true);
+                    setPollActive(false);
+                }
+            } catch (err) {}
+        })();
+
+        return () => clearInterval(intervalId);
+    }, [nextTopicToLearn, pollActive, sessionId]);
 
     const toggleLecture = (index) => {
         setExpandedLectures(prev => ({
@@ -35,78 +104,8 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
         }));
     };
 
-    const handleStartLearning = async () => {
-        setIsStarting(true);
-        console.log(">>> [UI] Start Learning clicked. Finding next topic...");
-        
-        let targetTopic = null;
-        for (const lecture of structure) {
-            // Priority 1: Check children for uncompleted topics
-            if (lecture.children && lecture.children.length > 0) {
-                for (const topic of lecture.children) {
-                    if (!completedTopics.includes(topic.title)) {
-                        targetTopic = {
-                            ...topic,
-                            collectionId: plan?.system_metadata?.collection_id
-                        };
-                        break;
-                    }
-                }
-            } 
-            
-            // Priority 2: Fallback to the lecture itself if it's uncompleted and has no children (Project ID: 25-26J-130)
-            if (!targetTopic && !completedTopics.includes(lecture.title)) {
-                targetTopic = {
-                    ...lecture,
-                    collectionId: plan?.system_metadata?.collection_id
-                };
-            }
-
-            if (targetTopic) break;
-        }
-
-        // Fallback for edge cases (Empty completedTopics or first run)
-        if (!targetTopic && structure.length > 0) {
-            const first = structure[0];
-            targetTopic = {
-                ...(first.children?.[0] || first),
-                collectionId: plan?.system_metadata?.collection_id
-            };
-        }
-
-        if (!targetTopic) {
-            toast.error("No topics found in curriculum.");
-            setIsStarting(false);
-            return;
-        }
-
-        try {
-            console.log(`>>> [UI] Starting topic: ${targetTopic.title}`);
-            const toastId = toast.loading(`Preparing lesson: ${targetTopic.title}...`);
-            
-            const result = await startSessionTopic(
-                sessionId, 
-                targetTopic.title, 
-                targetTopic.collectionId
-            );
-
-            toast.success("Cognitive path ready!", { id: toastId });
-            onContinue(targetTopic, result);
-        } catch (err) {
-            console.error(">>> [UI] Failed to start session:", err);
-            toast.error(`Start Failed: ${err.message}`);
-        } finally {
-            setIsStarting(false);
-        }
-    };
-
     if (isLoading) return <div className="p-10"><SkeletonTopic /></div>;
     if (error) return <div className="p-10 text-danger text-center">Failed to load curriculum.</div>;
-
-    const { session, plan } = sessionData || {};
-    const structure = plan?.curriculum?.structure || [];
-    const completedTopics = session?.progress?.completed_topics || [];
-    const masteryPercent = session?.progress?.percent_complete || 0;
 
     return (
         <div className="h-full w-full bg-edu-bg-light dark:bg-edu-bg-dark overflow-y-auto custom-scrollbar p-6 lg:p-12 transition-colors">
@@ -129,26 +128,6 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                             <Target size={16} className="text-primary" />
                             Dynamic path tailored for <span className="font-medium text-primary">{localStorage.getItem('userId') || "User"}</span>
                         </p>
-
-                        <div className="pt-4">
-                            <button
-                                onClick={handleStartLearning}
-                                disabled={isStarting}
-                                className="inline-flex items-center gap-3 px-8 py-4 rounded-2xl bg-primary text-white font-bold text-sm hover:bg-primary/90 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 transition-all shadow-xl shadow-primary/20 group"
-                            >
-                                {isStarting ? (
-                                    <>
-                                        <Loader2 size={18} className="animate-spin" />
-                                        <span>Initialising...</span>
-                                    </>
-                                ) : (
-                                    <>
-                                        <span>Start Learning</span>
-                                        <PlayCircle size={18} className="group-hover:translate-x-0.5 transition-transform" />
-                                    </>
-                                )}
-                            </button>
-                        </div>
                     </div>
 
                     <div className="bg-white/60 dark:bg-white/[0.02] backdrop-blur-3xl border border-edu-border-light dark:border-white/5 rounded-[32px] p-6 flex items-center gap-6 shadow-xl transition-all">
@@ -258,10 +237,17 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                                             <div className="p-4 space-y-2 bg-zinc-50/50 dark:bg-black/20">
                                                 {lectureTopics.map((topic, tIdx) => {
                                                     const isCompleted = completedTopics.includes(topic.title);
+                                                    const isLocked = !isCompleted && topic.title !== nextTopicToLearn;
+                                                    const isNext = topic.title === nextTopicToLearn;
+                                                    const isPollingDisabled = isNext && (!isPrefetchReady && !prefetchTimeout);
+                                                    
                                                     return (
                                                         <div
                                                             key={tIdx}
-                                                            className="flex items-center justify-between p-6 bg-white dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[28px] group/topic hover:border-primary/20 transition-all hover:shadow-xl"
+                                                            className={clsx(
+                                                                "flex items-center justify-between p-6 bg-white dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[28px] group/topic transition-all",
+                                                                isLocked ? "opacity-40 grayscale pointer-events-none" : "hover:border-primary/20 hover:shadow-xl"
+                                                            )}
                                                         >
                                                             <div className="flex items-center gap-4">
                                                                 <div className={clsx(
@@ -279,19 +265,30 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                                                             </div>
 
                                                             <button
-                                                                onClick={() => onContinue({
-                                                                    ...topic,
-                                                                    collectionId: plan?.system_metadata?.collection_id
-                                                                })}
+                                                                onClick={() => {
+                                                                    if (!isLocked) {
+                                                                        if (isNext) setPollActive(false);
+                                                                        onContinue({
+                                                                            ...topic,
+                                                                            collectionId: plan?.system_metadata?.collection_id
+                                                                        });
+                                                                    }
+                                                                }}
+                                                                disabled={isLocked || isPollingDisabled}
                                                                 className={clsx(
                                                                     "flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all",
-                                                                    isCompleted
+                                                                    isLocked ? "bg-zinc-200 dark:bg-white/5 text-zinc-400" : (isCompleted
                                                                         ? "bg-zinc-100 dark:bg-white/5 text-zinc-400 dark:text-slate-500 hover:bg-primary/10 hover:text-primary"
-                                                                        : "bg-primary text-white shadow-lg shadow-primary/20 hover:scale-105 active:scale-95"
+                                                                        : "bg-primary text-white shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100")
                                                                 )}
                                                             >
-                                                                {isCompleted ? "Review Node" : "Continue to Learn"}
-                                                                <PlayCircle size={14} />
+                                                                {isLocked ? "Locked" : (isCompleted ? "Review Node" : (isPollingDisabled ? (
+                                                                    <>
+                                                                        <Loader2 size={14} className="animate-spin" />
+                                                                        <span className="animate-pulse">Preparing...</span>
+                                                                    </>
+                                                                ) : "Continue to Learn"))}
+                                                                {!isPollingDisabled && <PlayCircle size={14} />}
                                                             </button>
                                                         </div>
                                                     );

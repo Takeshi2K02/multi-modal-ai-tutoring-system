@@ -81,16 +81,36 @@ async def ingest_document(file_content: bytes, filename: str, collection_id: str
     vectordb.add_documents(docs_to_add)
 
     # --- BUG 1: Write collection_id back to Plan Document ---
-    if plan_id:
+    if plan_id and plan_id != "undefined":
         try:
             db = get_db_connection()
-            db.learning_plans.update_one(
-                { "_id": ObjectId(plan_id) },
-                { "$set": { "system_metadata.collection_id": collection_id } }
+            target_id = ObjectId(plan_id) if isinstance(plan_id, str) else plan_id
+            
+            print(f"[Ingest] 🔍 Attempting MongoDB Write-back for plan_id: {plan_id}")
+            
+            # 1. Update Learning Plan (nested and top-level for safety)
+            plan_res = db.learning_plans.update_one(
+                { "_id": target_id },
+                { "$set": { 
+                    "system_metadata.collection_id": collection_id,
+                    "collection_id": collection_id 
+                } }
             )
-            print(f"[Ingest] ✅ collection_id {collection_id} saved to plan {plan_id}")
+            print(f"[Ingest] 📝 Plan Update Status: Matched={plan_res.matched_count}, Modified={plan_res.modified_count}")
+            
+            if plan_res.matched_count == 0:
+                print(f"[Ingest] ⚠️ WARNING: Plan {plan_id} NOT FOUND in MongoDB. It might be in Mock DB or a different collection.")
+            
+            # 2. Update linked sessions as a safety fallback
+            sess_res = db.learning_sessions.update_many(
+                { "plan_id": target_id },
+                { "$set": { "collection_id": collection_id } }
+            )
+            print(f"[Ingest] 📝 Session Update Status: Modified={sess_res.modified_count}")
+            
+            print(f"[Ingest] ✅ Sync Complete for Plan({plan_id})")
         except Exception as e:
-            print(f"[Ingest] ❌ Failed to save collection_id to plan: {e}")
+            print(f"[Ingest] ❌ Failed to save collection_id to plan/sessions: {e}")
 
     return {"status": "success", "chunks_count": len(chunks), "collection_id": collection_id}
 

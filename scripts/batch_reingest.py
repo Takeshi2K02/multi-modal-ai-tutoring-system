@@ -4,7 +4,7 @@ import json
 from pypdf import PdfReader
 from pymongo import MongoClient
 from dotenv import load_dotenv
-import chromadb
+from services.vector_factory import get_vector_db
 from datetime import datetime
 
 # Load env
@@ -19,13 +19,9 @@ STUDENT_EMAIL = "takeshidilshan10@gmail.com"
 collection_id = str(uuid.uuid4())
 print(f"Generated Batch ID (collection_id): {collection_id}")
 
-# 2. Setup ChromaDB
-# Note: Re-initializing to ensure fresh state
-client = chromadb.PersistentClient(path=VECTOR_STORE_PATH)
-collection = client.get_or_create_collection(
-    name="lectures",
-    metadata={"hnsw:space": "cosine"}
-)
+# 2. Setup VectorDB (Switched to Pinecone)
+print(f"Initializing VectorDB...")
+vectordb = get_vector_db()
 
 def chunk_text(text, filename, page_num):
     CHUNK_SIZE = 500
@@ -85,11 +81,14 @@ for filename in pdf_files:
                 })
                 
             if ids:
-                collection.add(
-                    ids=ids,
-                    documents=documents,
-                    metadatas=metadatas
-                )
+                docs_to_add = []
+                for j in range(len(ids)):
+                    docs_to_add.append({
+                        "id": ids[j],
+                        "text": documents[j],
+                        "metadata": metadatas[j]
+                    })
+                vectordb.add_documents(docs_to_add)
                 total_chunks_added += len(ids)
     except Exception as e:
         print(f"Error processing {filename}: {e}")
@@ -97,20 +96,18 @@ for filename in pdf_files:
 print(f"\nIngestion complete. Total chunks added: {total_chunks_added}")
 
 # 4. Verify
-all_results = collection.get()
-count_total = len(all_results['ids'])
-count_with_id = len([m for m in all_results['metadatas'] if m.get('collection_id') == collection_id])
+print(f"\n[Verify] Ingestion cycle complete.")
+# Note: Detailed verification with count_total requires specific Pinecone index stats if needed.
+# For now, we rely on the log messages from PineconeVectorDB.
 
-# Filter query
-filter_results = collection.query(
-    query_texts=["data warehouse"],
-    n_results=5,
-    where={"collection_id": collection_id}
+# Filter query test
+filter_results = vectordb.search(
+    query="data warehouse",
+    top_k=5,
+    filter={"collection_id": collection_id}
 )
-filter_count = len(filter_results['ids'][0]) if filter_results['ids'] else 0
+filter_count = len(filter_results)
 
-print(f"\n[Verify] Total chunks: {count_total}")
-print(f"[Verify] Chunks with collection_id: {count_with_id}")
 print(f"[Verify] Filter query returned: {filter_count} results")
 
 # 5. Update MongoDB

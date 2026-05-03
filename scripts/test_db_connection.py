@@ -2,8 +2,10 @@ import os
 from pymongo import MongoClient
 import certifi
 
-# URI found in cv/backend/.env
-MONGO_URI = "mongodb+srv://Dileka_21:Dileka123@cluster0.g3llspy.mongodb.net/ai_tutor_db?appName=Cluster0"
+from dotenv import load_dotenv
+load_dotenv()
+
+MONGO_URI = os.getenv("MONGO_URI")
 
 def test_connection():
     try:

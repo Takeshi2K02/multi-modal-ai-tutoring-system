@@ -113,8 +113,9 @@ const LectureUpload = ({ onBack, onSuccess }) => {
 
         // Automated Navigation on Ingestion Success
         if (!analysisMode && successCount === files.length && files.length > 0) {
+            const finalCollectionId = localStorage.getItem('last_upload_collection');
             setTimeout(() => {
-                onSuccess();
+                onSuccess(finalCollectionId);
             }, 1500);
         }
     };

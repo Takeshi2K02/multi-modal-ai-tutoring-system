@@ -20,7 +20,7 @@ The core reasoning engine is implemented as a directed acyclic graph (DAG) using
 -----------------------------
 The system employs a "Grounded-First" retrieval strategy to ensure technical accuracy in Business Intelligence (BI) topics.
 
-* Grounded Evidence: Uses ChromaDB (local_data) for context retrieval (top_k=5).
+* Grounded Evidence: Uses Pinecone (Serverless) for context retrieval (top_k=5).
 * Prevention of Context Drift: System prompts enforce strict alignment with retrieved RAG evidence, preventing generic LLM hallucinations.
 
 3. REINFORCEMENT LEARNING (RL) & CV FEEDBACK LOOP
