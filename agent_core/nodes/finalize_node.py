@@ -117,6 +117,11 @@ async def finalize_output(state: AgentState) -> AgentState:
     # Project ID: 25-26J-130: Mandatory LLM Synthesis Step
     # Expand the selected thought into a full multimodal lesson
     final_llm = get_llm()
+    
+    # Task 2: Pre-built Mermaid Integration
+    prebuilt_mermaid = state["context_data"].get("prebuilt_mermaid")
+    mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}" if prebuilt_mermaid else "Include a [MERMAID_START] diagram with [MERMAID_END] tags as per requirements."
+
     synthesis_prompt = ChatPromptTemplate.from_template("""
         Role: Senior Pedagogical Architect.
         Context: {query}
@@ -130,10 +135,8 @@ async def finalize_output(state: AgentState) -> AgentState:
            (CRITICAL: Do NOT use ANY other analogies).
         2. Expand on the technical methodologies mentioned in the blueprints.
         3. Explain 3 key technical terms related to Dimensional Modelling (Facts, Dimensions, Grain).
-        4. Include a [MERMAID_START] diagram using [MERMAID_END] tags.
-           - Central Node MUST be 'FactReceiptLineItem'.
-           - Surround it with EXACTLY 5 dimensions: DimDate, DimProduct, DimStore, DimCustomer, DimPromotion.
-           - Lay it out as a Star Schema.
+        4. {mermaid_instruction}
+           - If generating a new diagram: Central Node MUST be 'FactReceiptLineItem', surround with 5 dimensions, Star Schema.
         5. Use BI terminology (Facts, Dimensions, Star Schemas).
         6. Maintain an encouraging, professional tone.
         
@@ -143,42 +146,27 @@ async def finalize_output(state: AgentState) -> AgentState:
     # Trace the full path content for synthesis context
     blueprint_trace = " -> ".join([n.content for n in path])
     
-    thought_content = best_node.content if best_node else "No specific thought selected."
-    final_prompt = synthesis_prompt.format(
-        query=state["user_query"],
-        thought=thought_content,
-        strategy=strategy_label
-    )
-    
-    print("[ToT] 📝 --- Attempting Final Synthesis with Gemini 2.5 Flash ---")
-    print(f"[ToT] Handoff Content:\n{final_prompt}")
-
-    print(f"[Pipeline] 🌲 ToT Path Found: {strategy_label}")
-    print(f"[Pipeline] 🧩 Evaluating branch: {best_node.id} (Score: {best_node.path_score:.2f})")
-    print(f"[Pipeline] 🤖 Triggering Final Content Synthesis for {state['user_query']}...")
-
-    # Change 2 (Project ID: 25-26J-130): Use pre-computed synthesis payload if available.
-    # The combined score+synthesis prompt in _score_node_content stores the lesson
-    # content on the winning node at depth >= 1, saving one full Vertex AI round-trip.
+    # Bug 2: Check for precomputed synthesis payload from evaluate_node.py
     precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
-
+    
     try:
         if precomputed_payload:
-            print("[Finalizer] Using pre-computed synthesis payload — LLM call skipped")
+            print(f"[Finalizer] ✅ Using pre-computed synthesis payload for node {best_node.id} — skipping synthesis LLM call.")
             full_lesson = precomputed_payload
         else:
-            # Fallback: original synthesis LLM call (kept intact, not deleted).
+            print("[ToT] 📝 --- Attempting Final Synthesis (Fallback) ---")
             chain = synthesis_prompt | final_llm | StrOutputParser()
             full_lesson = await chain.ainvoke({
                 "query": state["user_query"],
                 "thought": blueprint_trace,
-                "strategy": strategy_label
-            }, timeout=20.0)
+                "strategy": strategy_label,
+                "mermaid_instruction": mermaid_instruction
+            }, timeout=25.0)
 
-        print("[Pipeline] ✅ Initial content generated and ready for delivery")
-
-        # Enhanced Logging: Print full response object equivalent (the string output in this case)
-        print(f"[ToT] >>> LLM Response Payload: {full_lesson}")
+        print("[Pipeline] ✅ Content ready for delivery")
+        
+        # Enhanced Logging
+        print(f"[ToT] >>> Final Content Payload ({len(full_lesson)} chars)")
         
         # Project ID: 25-26J-130: Mermaid Syntax Repair Filter
         # Strips all Markdown formatting (bolding, etc) from inside mermaid blocks

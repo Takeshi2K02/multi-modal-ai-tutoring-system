@@ -43,6 +43,7 @@ function AppInner() {
   const [contentGenRequest, setContentGenRequest] = useState(null); // New State
   const [countdown, setCountdown] = useState(0); // New State
   const [preGeneratedContent, setPreGeneratedContent] = useState(null); // PHASE 4: Direct Handoff
+  const [currentCollectionId, setCurrentCollectionId] = useState(null);
   
   // Manage Socket Connection (Project ID: 25-26J-130)
   useEffect(() => {
@@ -302,6 +303,7 @@ function AppInner() {
       case 'decomposition':
         return (
           <GoalDecomposition
+            collectionId={currentCollectionId}
             onBack={() => setView('upload')} // Navigates back to Upload instead of Agent Debugger
             onStart={(sessionId) => {
               setActiveSessionId(sessionId);
@@ -363,7 +365,10 @@ function AppInner() {
         return (
           <LectureUpload
             onBack={() => setView('decomposition')}
-            onSuccess={() => setView('decomposition')}
+            onSuccess={(cid) => {
+              setCurrentCollectionId(cid);
+              setView('decomposition');
+            }}
           />
         );
 

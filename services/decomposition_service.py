@@ -114,7 +114,11 @@ def decompose_goal(goal: str, collection_id: str = None, user_id: str = None) ->
     1. Design a comprehensive, multi-module curriculum (aim for 4-7 modules) that logically decomposes the Goal.
     2. Each module must have a clear 'title' and a list of 'topics'.
     3. For each topic, map it to the relevant 'chunk_indices' from the provided list.
-    4. Ensure the flow is pedagogical (from basics to advanced).
+    4. For each topic, generate a 'mermaid_template' that visualizes the core structural or relational concept of that topic.
+       - Use [MERMAID_START] and [MERMAID_END] tags.
+       - Logic: graph TD or sequenceDiagram.
+       - Ensure it is generic enough to be grounded in the evidence.
+    5. Ensure the flow is pedagogical (from basics to advanced).
     
     Return strictly Valid JSON:
     {{
@@ -125,7 +129,8 @@ def decompose_goal(goal: str, collection_id: str = None, user_id: str = None) ->
                 "topics": [
                     {{
                         "title": "Topic Name",
-                        "chunk_indices": [0, 5, 12]
+                        "chunk_indices": [0, 5, 12],
+                        "mermaid_template": "[MERMAID_START]graph TD\\n  A[Start] --> B[Concept]\\n  B --> C[Details]\\n[MERMAID_END]"
                     }}
                 ]
             }}
@@ -166,6 +171,7 @@ def decompose_goal(goal: str, collection_id: str = None, user_id: str = None) ->
                         "id": str(uuid.uuid4()),
                         "title": topic["title"],
                         "type": "TOPIC",
+                        "mermaid_template": topic.get("mermaid_template"),
                         "evidence": {
                             "sourceDocs": list(evidence_source_docs),
                             "topChunks": evidence_top_chunks

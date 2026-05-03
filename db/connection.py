@@ -7,32 +7,41 @@ load_dotenv()
 
 import certifi
 
-# Use the URI from the prompt as default, but allow env var override
-MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://admin:admin@cluster0.ngps8t9.mongodb.net/?appName=Cluster0")
+# Use the URI from env var, mandatory for production (Project ID: 25-26J-130)
+MONGO_URI = os.getenv("MONGO_URI")
 
 def get_db_connection():
     """
     Establishes a connection to MongoDB.
-    Returns the database object.
+    Raises ConnectionError if the database is unreachable.
     """
+    if not MONGO_URI:
+        raise ConnectionError("MONGO_URI not found in environment variables. Please check your .env file.")
+
     try:
         # Fix: SSL only for remote connections
         client_options = {"serverSelectionTimeoutMS": 5000}
         if "mongodb+srv" in MONGO_URI or "ssl=true" in MONGO_URI.lower():
-            import certifi
             client_options["tlsCAFile"] = certifi.where()
             client_options["tls"] = True
+            
         client = MongoClient(MONGO_URI, **client_options)
-        # Verify connection
+        
+        # Verify connection immediately
         client.admin.command('ping')
-        # Project ID: 25-26J-130: Clean Logging - Suppress success ping
+        
+        # Suppress verbose pymongo logs
         logging.getLogger('pymongo').setLevel(logging.CRITICAL)
-        return client.get_database("edusynth_db")
+        
+        # Resolve database name from URI if possible, or fallback to default
+        db_name = MONGO_URI.split("/")[-1].split("?")[0] or "edusynth_db"
+        return client.get_database(db_name)
+        
     except Exception as e:
-        print(f"Error connecting to MongoDB: {e}")
-        # In a real app, we might raise e, but for this starter template / mock mode, 
-        # we might want to handle it gracefully if using mocks only.
-        return None
+        # Crash Loudly (Requirement 1)
+        error_msg = f"FATAL: Could not connect to MongoDB at {MONGO_URI.split('@')[-1] if '@' in MONGO_URI else 'local'}. Error: {e}"
+        print(f"\n{'!' * 60}\n{error_msg}\n{'!' * 60}\n")
+        raise ConnectionError(error_msg)
 
 def get_students_collection(db):
     if db is not None:

@@ -4,12 +4,9 @@ from db.connection import get_db_connection
 from bson.objectid import ObjectId
 
 class LearningPlanService:
-    # In-memory Mock Store for Demo Mode
-    MOCK_DB = {}
-
     def __init__(self):
         self.db = get_db_connection()
-        self.collection = self.db.get_collection("learning_plans") if self.db is not None else None
+        self.collection = self.db.get_collection("learning_plans")
 
     def save_learning_plan(self, data: Dict[str, Any]) -> str:
         """
@@ -39,23 +36,16 @@ class LearningPlanService:
             },
             
             "system_metadata": {
-                "vector_provider": "local",
+                "vector_provider": "pinecone",
                 "source_real_data": True, 
                 "version": "1.0",
-                "collection_id": data.get("collectionId") # Phase 21: RAG Isolation
+                "collection_id": data.get("collection_id") or data.get("collectionId") # Phase 21: RAG Isolation
             }
         }
 
-        # 2. Insert (Real or Mock)
-        if self.collection is not None:
-            result = self.collection.insert_one(plan_doc)
-            return str(result.inserted_id)
-        else:
-            print(">>> Using Mock DB for Learning Plan")
-            mock_id = str(ObjectId())
-            plan_doc["_id"] = mock_id # Store ID as string for consistency in mock
-            LearningPlanService.MOCK_DB[mock_id] = plan_doc
-            return mock_id
+        # 2. Insert
+        result = self.collection.insert_one(plan_doc)
+        return str(result.inserted_id)
 
     def _sanitize_structure(self, raw_toc: list) -> list:
         """
@@ -74,6 +64,7 @@ class LearningPlanService:
                 clean_topic = {
                     "title": topic.get("title", "Unknown"),
                     "type": topic.get("type", "TOPIC"),
+                    "mermaid_template": topic.get("mermaid_template"),
                     "evidence_refs": []
                 }
                 
@@ -87,18 +78,10 @@ class LearningPlanService:
         return clean_toc
 
     def get_plan(self, plan_id: str) -> Optional[Dict[str, Any]]:
-        if self.collection is not None:
-             try:
-                doc = self.collection.find_one({"_id": ObjectId(plan_id)})
-                if doc:
-                    doc["_id"] = str(doc["_id"])
-                return doc
-             except Exception:
-                return None
-        else:
-            # Mock Retrieval
-            doc = LearningPlanService.MOCK_DB.get(plan_id)
+        try:
+            doc = self.collection.find_one({"_id": ObjectId(plan_id)})
             if doc:
-                # Return deep copy if needed, but dict is fine for read
-                return doc
+                doc["_id"] = str(doc["_id"])
+            return doc
+        except Exception:
             return None

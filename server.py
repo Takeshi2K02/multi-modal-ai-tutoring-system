@@ -255,7 +255,36 @@ fastapi_app.add_middleware(
 )
 
 from agent_core.snapshot import get_student_snapshot
-from db.connection import get_db_connection
+from db.connection import get_db_connection, get_profiles_collection
+from services.vector_factory import get_vector_db
+
+def check_infrastructure():
+    """
+    Startup health check: Ensures MongoDB and Pinecone are reachable.
+    """
+    print("\n[Startup] 🩺 Running Infrastructure Health Check...")
+    
+    # 1. MongoDB Check
+    try:
+        db = get_db_connection()
+        print(f"[Startup] ✅ MongoDB Connected: {db.name}")
+    except Exception as e:
+        print(f"[Startup] ❌ MongoDB Connection Failed!")
+        raise e
+
+    # 2. VectorDB Check
+    try:
+        vectordb = get_vector_db()
+        print(f"[Startup] ✅ VectorDB Initialized ({type(vectordb).__name__})")
+    except Exception as e:
+        print(f"[Startup] ❌ VectorDB Initialization Failed!")
+        raise e
+        
+    print("[Startup] 🚀 All systems green. Ready for requests.\n")
+
+# Run check immediately on import (Requirement 3)
+check_infrastructure()
+
 from agent_core.graph import create_tot_graph
 from agent_core.schemas import AgentState, ThoughtNode
 
@@ -604,7 +633,65 @@ async def get_session(session_id: str):
     data = service.get_session_details(session_id)
     if not data:
         raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Phase 1 Task 3: Trigger Background RAG Pre-fetch
+    try:
+        plan = data.get("plan", {})
+        collection_id = plan.get("system_metadata", {}).get("collection_id")
+        if collection_id:
+            # We pre-fetch for all topics in the plan
+            topics = []
+            for lecture in plan.get("curriculum", {}).get("structure", []):
+                for topic in lecture.get("children", []):
+                    topics.append(topic.get("title"))
+            
+            asyncio.create_task(prefetch_rag_to_redis(collection_id, topics, str(plan.get("_id"))))
+    except Exception as e:
+        print(f"[Cache] Pre-fetch trigger failed: {e}")
+
     return data
+
+@fastapi_app.post("/api/session/exit")
+async def exit_session(req: Dict[str, str]):
+    """
+    Phase 1 Task 3: Explicitly delete RAG cache on module exit.
+    """
+    plan_id = req.get("plan_id")
+    if plan_id:
+        try:
+            import redis
+            r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+            keys = r.keys(f"rag_cache:{plan_id}:*")
+            if keys:
+                r.delete(*keys)
+                print(f"[Cache] 🗑️ Invalidated {len(keys)} keys for plan {plan_id}")
+        except Exception as e:
+            print(f"[Cache] ⚠️ Invalidation failed: {e}")
+    return {"status": "exited"}
+
+async def prefetch_rag_to_redis(collection_id: str, topics: List[str], plan_id: str):
+    """
+    Phase 1 Task 3: Background task to warm up Redis with Pinecone chunks.
+    """
+    try:
+        import redis, json
+        r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+        from services.vector_factory import get_vector_db
+        vectordb = get_vector_db()
+        
+        for topic in topics:
+            cache_key = f"rag_cache:{plan_id}:{topic}"
+            # Check if already cached
+            if r.exists(cache_key): continue
+            
+            print(f"[Cache] 🛰️ Pre-fetching RAG for topic: {topic}")
+            # Cap at 20 chunks as requested
+            results = vectordb.search(f"Teach me about {topic}", top_k=20, filter={"collection_id": collection_id})
+            if results:
+                r.setex(cache_key, 1800, json.dumps(results)) # 30 min TTL
+        print(f"[Cache] ✅ Pre-fetch complete for plan {plan_id}")
+    except Exception as e:
+        print(f"[Cache] ⚠️ Background pre-fetch failed: {e}")
 
 @fastapi_app.delete("/api/sessions/{session_id}")
 async def delete_session(session_id: str):
@@ -833,7 +920,10 @@ async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_curren
     # Inject real content into context if available
     context_data = {
         "test_cv_state": cv_state,
-        "collection_id": resolved_collection_id # Phase 21: RAG Isolation
+        "collection_id": resolved_collection_id, # Phase 21: RAG Isolation
+        "topic_id": req.topic_title,
+        "session_id": session_id,
+        "module_id": str(plan_id) # plan_id is used as module_id for cache key grouping
     }
     if req.topic_content:
         context_data["topic_content"] = req.topic_content
@@ -1200,7 +1290,6 @@ async def handle_user_feedback(req: UserFeedbackRequest):
     Updates student preferences based on Thumbs Up/Down.
     """
     try:
-        from db.connection import get_db_connection, get_profiles_collection
         db = get_db_connection()
         profiles = get_profiles_collection(db)
         
@@ -1298,7 +1387,6 @@ async def accept_shadow_intervention(req: AcceptShadowRequest):
     Project ID: 25-26J-130
     """
     try:
-        from db.connection import get_db_connection, get_profiles_collection
         db = get_db_connection()
         profiles = get_profiles_collection(db)
         
@@ -1359,7 +1447,6 @@ async def get_enhanced_analytics(current_user: str = Depends(get_current_user)):
     """
     try:
         student_id = current_user
-        from db.connection import get_db_connection, get_profiles_collection
         db = get_db_connection()
         
         # Mock / Fallback Data if DB is offline
@@ -1517,7 +1604,6 @@ async def get_user_profile(current_user: str = Depends(get_current_user)):
     """
     try:
         student_id = current_user
-        from db.connection import get_db_connection, get_profiles_collection
         db = get_db_connection()
         profiles = get_profiles_collection(db)
         

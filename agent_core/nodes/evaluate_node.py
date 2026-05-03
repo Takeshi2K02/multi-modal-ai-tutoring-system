@@ -1,8 +1,8 @@
-import asyncio, json, time
+import asyncio, json, time, re
 from datetime import datetime
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from agent_core.schemas import AgentState, ThoughtNode
+from agent_core.schemas import AgentState, ThoughtNode, RL_ACTION_MAP
 from agent_core.llm import get_llm
 from agent_core.tot_config import semaphore, extract_json_from_text, CONFIG
 from db.connection import get_db_connection, get_profiles_collection
@@ -175,6 +175,64 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
             print(f"[ToT] 🏆 >>> Path Selected (Score {best_at_depth.path_score:.2f} | Depth {best_at_depth.depth}): Node {best_at_depth.id}")
             best_at_depth.metadata["pruning_status"] = "Selected"
 
+            # --- PHASE 1 TASK 1: RUN SYNTHESIS ONLY ON THE WINNER ---
+            if best_at_depth.depth >= 1:
+                print(f"[ToT] 🤖 Triggering Final Content Synthesis ONLY for winner: {best_at_depth.id}")
+                
+                # Retrieve pre-built mermaid for Task 2
+                prebuilt_mermaid = state["context_data"].get("prebuilt_mermaid")
+                mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}" if prebuilt_mermaid else "Include a [MERMAID_START] diagram with [MERMAID_END] tags as per requirements."
+                
+                # Strategy Label Mapping
+                action_id = snapshot.get("action_id", 0)
+                strategy_label = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown Strategy").upper().replace(" ", "_")
+                
+                synthesis_prompt = PromptTemplate(
+                    template="""
+Role: Senior Pedagogical Architect.
+Context: {query}
+Selected Strategy Path (Blueprints): {thought}
+Strategy Label: {strategy}
+
+TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a comprehensive multimodal lesson.
+
+REQUIREMENTS:
+1. Start with THE SUPERMARKET RECEIPT ANALOGY (no other analogies).
+2. Expand on the technical methodologies in the blueprints.
+3. Explain 3 key technical terms: Facts, Dimensions, Grain.
+4. {mermaid_instruction}
+5. Use BI terminology (Facts, Dimensions, Star Schemas).
+6. Maintain an encouraging, professional tone.
+
+OUTPUT: Pure Markdown text with multimodal tags.
+""",
+                    input_variables=["query", "thought", "strategy", "mermaid_instruction"]
+                )
+                
+                path_to_best = []
+                curr = best_at_depth
+                while curr:
+                    path_to_best.append(curr)
+                    curr = tree_memory.get(curr.parent_id) if curr.parent_id else None
+                path_to_best.reverse()
+                blueprint_trace = " -> ".join([n.content for n in path_to_best])
+
+                try:
+                    synth_llm = get_llm()
+                    # Do NOT disable thinking for synthesis as requested
+                    chain = synthesis_prompt | synth_llm | StrOutputParser()
+                    payload = await chain.ainvoke({
+                        "query": state["user_query"],
+                        "thought": blueprint_trace,
+                        "strategy": strategy_label,
+                        "mermaid_instruction": mermaid_instruction
+                    }, timeout=40.0)
+                    
+                    best_at_depth.metadata["synthesis_payload"] = payload
+                    print(f"[ToT] ✅ Synthesis complete for winner node {best_at_depth.id} ({len(payload)} chars)")
+                except Exception as e:
+                    print(f"[ToT] ❌ Synthesis failed for winner: {e}")
+
             await sio.emit("path_selected", {
                 "synthesis_id": state.get("interaction_id"),
                 "id": best_at_depth.id,
@@ -212,11 +270,11 @@ async def _score_node_content(state: AgentState, node: ThoughtNode, tree_memory:
     if hasattr(snapshot, "dict"): snapshot = snapshot.dict()
     llm = get_llm()
 
-    is_final_depth = node.depth >= 1  # depth 1 is terminal after Change 1
-
+    is_final_depth = node.depth >= 1
     if is_final_depth:
-        # --- COMBINED SCORE + SYNTHESIS PROMPT ---
-        # Produces both a numeric score and full lesson content in one LLM call.
+        # --- LIGHTWEIGHT SCORING-ONLY PROMPT (Project ID: 25-26J-130) ---
+        # Produces only a numeric score and rationale to save tokens and latency.
+        # Synthesis is deferred to finalize_node.py for the winner only.
         combined_prompt = PromptTemplate(
             template="""
 Role: Senior Pedagogical Architect & Scoring Engine for Gemini 2.5 Flash.
@@ -229,30 +287,16 @@ RL Strategy: {rl_strategy} | Trend: {trend}
 Candidate Path: "{content}"
 Metadata: {metadata}
 
-PART 1 — SCORING (0.0-1.0):
-Evaluate this path on:
+TASK: Evaluate this path on:
   1. Empathy Score (boost if deviation_alert is True in snapshot).
   2. Alignment with RL Strategy.
   3. Multi-modal Effectiveness for the current engagement trend.
 
-PART 2 — SYNTHESIS:
-Expand the selected strategy into a complete multimodal lesson.
-REQUIREMENTS:
-  1. Start with THE SUPERMARKET RECEIPT ANALOGY (no other analogies).
-  2. Expand on the technical methodologies in the candidate path.
-  3. Define 3 key BI terms: Facts, Dimensions, Grain.
-  4. Include a [MERMAID_START] diagram with [MERMAID_END] tags.
-     - Central node MUST be 'FactReceiptLineItem'.
-     - Surround with EXACTLY 5 dimensions: DimDate, DimProduct, DimStore, DimCustomer, DimPromotion.
-     - Star Schema layout.
-  5. Use BI terminology throughout.
-  6. Maintain an encouraging, professional tone.
-
-OUTPUT FORMAT (STRICT — do not deviate):
-SCORE: <float 0.0-1.0>
-RATIONALE: <one sentence>
-SYNTHESIS_PAYLOAD:
-<full markdown lesson content here, including MERMAID block>
+JSON OUTPUT FORMAT (STRICT):
+{{
+    "score": <float 0.0-1.0>,
+    "rationale": "<one sentence>"
+}}
 """,
             input_variables=["query", "snapshot", "profile", "rl_strategy", "trend", "content", "metadata"]
         )
@@ -263,9 +307,11 @@ SYNTHESIS_PAYLOAD:
         for attempt in range(max_retries):
             try:
                 async with semaphore:
-                    chain = combined_prompt | llm | StrOutputParser()
+                    # Bug 4: Disable thinking for scoring only
+                    scoring_llm = llm.bind(thinking_config={"include_thoughts": False, "budget_tokens": 0})
+                    
                     raw_res = await asyncio.wait_for(
-                        chain.ainvoke({
+                        scoring_llm.ainvoke({
                             "query": state["user_query"],
                             "snapshot": json.dumps(snapshot),
                             "profile": str(state["profile"]),
@@ -274,48 +320,35 @@ SYNTHESIS_PAYLOAD:
                             "content": node.content,
                             "metadata": str(node.metadata)
                         }),
-                        timeout=30.0
+                        timeout=15.0
                     )
+                    
+                    # Bug 1: Extract content from AIMessage and strip markdown code fences
+                    text_content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
+                    # Strip markdown blocks like ```json ... ```
+                    json_str = re.sub(r"```(?:json)?\s*([\s\S]*?)\s*```", r"\1", text_content).strip()
+                    # Final fallback regex to find anything that looks like JSON if the above fails
+                    if not json_str.startswith("{"):
+                        match = re.search(r"({[\s\S]*})", json_str)
+                        if match: json_str = match.group(1)
 
-                # --- Parse score ---
-                score = 0.5
-                score_match = __import__("re").search(r"SCORE:\s*([0-9.]+)", raw_res)
-                if score_match:
-                    try:
-                        score = float(score_match.group(1))
-                    except ValueError:
-                        pass
+                    res = json.loads(json_str)
 
-                # --- Parse synthesis payload ---
-                payload_match = __import__("re").search(
-                    r"SYNTHESIS_PAYLOAD:\s*([\s\S]+)", raw_res
-                )
-                if payload_match:
-                    synthesis_payload = payload_match.group(1).strip()
-                    node.metadata["synthesis_payload"] = synthesis_payload
-                    print(f"[ToT] 💾 Combined prompt: score={score:.2f}, "
-                          f"payload_chars={len(synthesis_payload)} stored on node {node.id}")
-                else:
-                    print(f"[ToT] ⚠️ Combined prompt: no SYNTHESIS_PAYLOAD found in response for node {node.id}")
-
+                score = float(res.get("score", 0.5))
+                print(f"[ToT] ⚖️ Lightweight score={score:.2f} for node {node.id}")
                 return score
 
             except asyncio.CancelledError:
-                print("[ToT] 🛑 >>> Scoring Cancelled: Graceful exit triggered.")
+                print("[ToT] 🛑 >>> Scoring Cancelled.")
                 raise
             except Exception as e:
                 wait_time = base_delay * (2 ** attempt) + random.random()
-                print(f"[ToT] ⚠️ Combined Scoring Failed (Attempt {attempt+1}/{max_retries}): {e}. Retrying in {wait_time:.2f}s...")
+                print(f"[ToT] ⚠️ Lightweight Scoring Failed (Attempt {attempt+1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(wait_time)
                 else:
-                    pref = state.get("student_preferences", {"visual": 0.33, "textual": 0.33, "interactive": 0.34})
-                    modality = node.metadata.get("strategy_type", "textual").lower()
-                    fallback_score = 0.8 if pref.get(modality, 0) > 0.4 else 0.5
-                    print(f"[ToT] ⚠️ Branch {node.id} scored via heuristic fallback ({fallback_score}) after {max_retries} LLM failures")
-                    return fallback_score
+                    return 0.5
         return 0.5
-
     else:
         # --- ORIGINAL SCORING-ONLY PROMPT (depth 0) ---
         prompt = PromptTemplate(
