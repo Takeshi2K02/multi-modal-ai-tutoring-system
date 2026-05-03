@@ -39,8 +39,14 @@ async def retrieve_context(state: AgentState) -> AgentState:
     student_id = state["student_id"]
     
     if REDIS_AVAILABLE and topic_id:
-        cache_key = f"rag_cache:{module_id}:{topic_id}"
+        # Fix 4: Normalize lookup key with strip() to match pre-fetch
+        cache_key = f"rag_cache:{module_id.strip()}:{topic_id.strip()}"
         try:
+            # Fix 6: Detailed cache lookup logging
+            is_found = redis_client.exists(cache_key)
+            print(f"[Cache] 🔌 Redis Connected (Read Path) | DB: 0")
+            print(f"[Cache] 🔍 Looking up key: {cache_key} | found={is_found}")
+            
             t_start = time.time()
             cached_data = redis_client.get(cache_key)
             if cached_data:

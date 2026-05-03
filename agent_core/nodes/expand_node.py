@@ -68,7 +68,13 @@ async def expand_frontier(state: AgentState) -> AgentState:
 
     # Generate children for winner candidates only
     tasks = [_generate_children_content(state, node, next_depth) for node in candidates]
+    
+    # Step 5: Add expansion phase timing
+    import time
+    e_start = time.time()
     all_children_contents = await asyncio.gather(*tasks)
+    e_duration = (time.time() - e_start) * 1000
+    print(f"[ToT] 🚀 Expansion phase completed in {e_duration:.2f}ms")
     
     new_frontier = []
     for node, children_contents in zip(candidates, all_children_contents):

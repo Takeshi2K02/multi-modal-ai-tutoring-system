@@ -640,22 +640,30 @@ async def get_session(session_id: str):
         plan_id = str(plan.get("_id"))
         collection_id = plan.get("system_metadata", {}).get("collection_id")
         if collection_id and plan_id:
+            plan_id = plan_id.strip()
             # Fix 4: Deduplication guard using Redis
             import redis
-            r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
-            lock_key = f"prefetch_lock:{plan_id}"
-            
-            if r.exists(lock_key):
-                print(f"[Cache] ⏭️ Pre-fetch already complete for plan {plan_id} — skipping")
-            else:
-                r.setex(lock_key, 2100, "locked") # 35 minute TTL
-                # We pre-fetch for all topics in the plan
-                topics = []
-                for lecture in plan.get("curriculum", {}).get("structure", []):
-                    for topic in lecture.get("children", []):
-                        topics.append(topic.get("title"))
+            try:
+                r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0, socket_timeout=1)
+                lock_key = f"prefetch_lock:{plan_id}"
+                lock_exists = r.exists(lock_key)
                 
-                asyncio.create_task(prefetch_rag_to_redis(collection_id, topics, plan_id))
+                print(f"[Cache] 🔍 Pre-fetch check: plan={plan_id} | lock_exists={lock_exists}")
+                
+                if lock_exists:
+                    print(f"[Cache] ⏭️ Pre-fetch already complete for plan {plan_id} — skipping")
+                else:
+                    # Verified: 2100s = 35 minutes TTL
+                    r.setex(lock_key, 2100, "locked")
+                    # We pre-fetch for all topics in the plan
+                    topics = []
+                    for lecture in plan.get("curriculum", {}).get("structure", []):
+                        for topic in lecture.get("children", []):
+                            topics.append(topic.get("title"))
+                    
+                    asyncio.create_task(prefetch_rag_to_redis(collection_id, topics, plan_id))
+            except (redis.ConnectionError, redis.TimeoutError):
+                print(f"[Cache] ⚠️ Redis down at pre-fetch time — chunks will be fetched live")
     except Exception as e:
         print(f"[Cache] Pre-fetch trigger failed: {e}")
 
@@ -686,11 +694,13 @@ async def prefetch_rag_to_redis(collection_id: str, topics: List[str], plan_id: 
     try:
         import redis, json
         r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+        print(f"[Cache] 🔌 Redis Connected (Write Path) | Host: {os.getenv('REDIS_HOST', 'localhost')} | DB: 0")
         from services.vector_factory import get_vector_db
         vectordb = get_vector_db()
         
         for topic in topics:
-            cache_key = f"rag_cache:{plan_id}:{topic}"
+            # Fix 4: Normalize key with strip() to prevent mismatches
+            cache_key = f"rag_cache:{plan_id.strip()}:{topic.strip()}"
             # Check if already cached
             if r.exists(cache_key): continue
             
@@ -699,6 +709,7 @@ async def prefetch_rag_to_redis(collection_id: str, topics: List[str], plan_id: 
             results = vectordb.search(f"Teach me about {topic}", top_k=20, filter={"collection_id": collection_id})
             if results:
                 r.setex(cache_key, 1800, json.dumps(results)) # 30 min TTL
+                print(f"[Cache] 📝 Writing key: {cache_key}")
         print(f"[Cache] ✅ Pre-fetch complete for plan {plan_id}")
     except Exception as e:
         print(f"[Cache] ⚠️ Background pre-fetch failed: {e}")
@@ -933,7 +944,7 @@ async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_curren
         "collection_id": resolved_collection_id, # Phase 21: RAG Isolation
         "topic_id": req.topic_title,
         "session_id": session_id,
-        "module_id": str(plan_id) # plan_id is used as module_id for cache key grouping
+        "module_id": str(plan_id).strip() # plan_id is used as module_id for cache key grouping
     }
     if req.topic_content:
         context_data["topic_content"] = req.topic_content

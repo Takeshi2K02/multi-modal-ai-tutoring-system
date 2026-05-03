@@ -194,15 +194,16 @@ Context: {query}
 Selected Strategy Path (Blueprints): {thought}
 Strategy Label: {strategy}
 
-TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a comprehensive multimodal lesson.
+TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a CONCISE and PRECISE multimodal lesson.
 
-REQUIREMENTS:
-1. Start with THE SUPERMARKET RECEIPT ANALOGY (no other analogies).
-2. Expand on the technical methodologies in the blueprints.
-3. Explain 3 key technical terms: Facts, Dimensions, Grain.
-4. {mermaid_instruction}
-5. Use BI terminology (Facts, Dimensions, Star Schemas).
-6. Maintain an encouraging, professional tone.
+STRICT REQUIREMENTS:
+1. Your total response MUST NOT EXCEED 600 WORDS. Be concise.
+2. Start with THE SUPERMARKET RECEIPT ANALOGY (max 150 words).
+3. Expand on the technical methodologies precisely.
+4. Explain 3 key technical terms (Facts, Dimensions, Grain) - max 75 words EACH.
+5. {mermaid_instruction}
+6. Mermaid Limit: Core star schema only (Max 1 fact table, 4 dimension tables). Use 'graph TD' syntax.
+7. Maintain an encouraging, professional tone.
 
 OUTPUT: Pure Markdown text with multimodal tags.
 """,
@@ -224,12 +225,18 @@ OUTPUT: Pure Markdown text with multimodal tags.
                     synth_llm = base_llm.bind(thinking_config={"include_thoughts": False, "budget_tokens": 0})
                     
                     chain = synthesis_prompt | synth_llm | StrOutputParser()
+                    
+                    # Step 4: Add synthesis timing log
+                    print(f"[ToT] 🔬 Synthesis LLM call started for node {best_at_depth.id}")
+                    s_start = time.time()
                     payload = await chain.ainvoke({
                         "query": state["user_query"],
                         "thought": blueprint_trace,
                         "strategy": strategy_label,
                         "mermaid_instruction": mermaid_instruction
                     }, timeout=40.0)
+                    s_duration = (time.time() - s_start) * 1000
+                    print(f"[ToT] 🔬 Synthesis LLM call completed in {s_duration:.2f}ms | {len(payload)} chars generated")
                     
                     best_at_depth.metadata["synthesis_payload"] = payload
                     print(f"[ToT] ✅ Synthesis complete for winner node {best_at_depth.id} ({len(payload)} chars)")

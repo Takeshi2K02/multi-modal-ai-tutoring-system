@@ -77,7 +77,6 @@ async def finalize_output(state: AgentState) -> AgentState:
     """
     # Fix 2: Move pre-computed payload check to the very top to skip all LLM work
     best_node = state.get("best_node")
-    precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
     
     # Common variables needed for both paths
     interaction_id = state.get("interaction_id")
@@ -94,7 +93,42 @@ async def finalize_output(state: AgentState) -> AgentState:
         print(f"[ToT] 🛑 --- BLOCKED: Node {best_node.id if best_node else 'N/A'} is NOT 'Selected'. Returning. ---")
         return state
 
+    def validate_and_fallback_mermaid(text):
+        mermaid_match = re.search(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", text)
+        if not mermaid_match:
+            return text
+        
+        inner = mermaid_match.group(1).strip()
+        # Basic structure checks: must start with graph/erDiagram/flowchart and contain an arrow
+        is_valid = any(inner.startswith(kw) for kw in ["graph", "erDiagram", "flowchart", "sequenceDiagram"])
+        is_valid = is_valid and ("-->" in inner or "---" in inner or "-> " in inner)
+        
+        if is_valid:
+            print(f"[Mermaid] ✅ Valid syntax detected for node {best_node.id if best_node else 'N/A'}")
+            return text
+        else:
+            print(f"[Mermaid] ⚠️ Invalid syntax — using fallback template for node {best_node.id if best_node else 'N/A'}")
+            fallback = (
+                "[MERMAID_START]\n"
+                "graph TD\n"
+                "  Fact[Sales Fact] --> Prod[Product Dim]\n"
+                "  Fact --> Time[Time Dim]\n"
+                "  Fact --> Loc[Location Dim]\n"
+                "  Fact --> Cust[Customer Dim]\n"
+                "[MERMAID_END]"
+            )
+            return re.sub(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", fallback, text)
+
+    def repair_mermaid(text):
+        def clean_mermaid(match):
+            inner = match.group(1)
+            # Remove markdown bold/italics often hallucinated by LLMs inside mermaid
+            inner = re.sub(r"\*\*|\_\_", "", inner)
+            return f"[MERMAID_START]\n{inner.strip()}\n[MERMAID_END]"
+        return re.sub(r"\[MERMAID_START\](.*?)\[MERMAID_END\]", clean_mermaid, text, flags=re.DOTALL)
+
     start_time = state.get("build_time", time.time())
+    precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
 
     if precomputed_payload:
         print(f"[Finalizer] ✅ Using pre-computed synthesis payload for node {best_node.id} — skipping ALL LLM logic.")
@@ -149,9 +183,10 @@ async def finalize_output(state: AgentState) -> AgentState:
             
             REQUIREMENTS:
             1. Start with THE SUPERMARKET RECEIPT ANALOGY. 
-            2. Expand on the technical methodologies.
+            2. Expand on the technical methodologies concisely.
             3. Explain 3 terms: Facts, Dimensions, Grain.
             4. {mermaid_instruction}
+            5. Mermaid Diagram Type: Use 'graph TD' (Top-Down) for all architectural schemas.
             
             OUTPUT: Pure Markdown.
         """)
@@ -169,24 +204,6 @@ async def finalize_output(state: AgentState) -> AgentState:
             }, timeout=25.0)
 
             print("[Pipeline] ✅ Content ready for delivery")
-            def repair_mermaid(text):
-                def clean_mermaid(match):
-                    inner = match.group(1)
-                    inner = re.sub(r"\*\*|\_\_", "", inner)
-                    return f"[MERMAID_START]\n{inner.strip()}\n[MERMAID_END]"
-                return re.sub(r"\[MERMAID_START\](.*?)\[MERMAID_END\]", clean_mermaid, text, flags=re.DOTALL)
-            
-            full_lesson = repair_mermaid(full_lesson)
-            if not full_lesson or not isinstance(full_lesson, str) or len(full_lesson.strip()) == 0:
-                raise ValueError("LLM returned empty body_text")
-            
-            initial_affect = snapshot.get("current_affect", {})
-            initial_score = initial_affect.get("score", 0.5)
-            simulated_final_score = min(1.0, initial_score + 0.2) if best_node and best_node.path_score > 0.8 else initial_score
-            outcome = "Improved" if simulated_final_score > initial_score else "Stable"
-            is_high_confidence = simulated_final_score >= 0.85
-            latency = time.time() - start_time
-            estimated_reading_time = calculate_lesson_benchmark(full_lesson, state.get("profile", {}), topic=state["user_query"])
                 
         except Exception as e:
             print(f"Synthesis Failed: {e}")
@@ -195,6 +212,20 @@ async def finalize_output(state: AgentState) -> AgentState:
             is_high_confidence = False
             latency = 0
             estimated_reading_time = 30
+
+    # Apply global repair and validation
+    full_lesson = repair_mermaid(full_lesson)
+    full_lesson = validate_and_fallback_mermaid(full_lesson)
+
+    # Outcome assignment for JIT path
+    if not precomputed_payload:
+        initial_affect = snapshot.get("current_affect", {})
+        initial_score = initial_affect.get("score", 0.5)
+        simulated_final_score = min(1.0, initial_score + 0.2) if best_node and best_node.path_score > 0.8 else initial_score
+        outcome = "Improved" if simulated_final_score > initial_score else "Stable"
+        is_high_confidence = simulated_final_score >= 0.85
+        latency = time.time() - start_time
+        estimated_reading_time = calculate_lesson_benchmark(full_lesson, state.get("profile", {}), topic=state["user_query"])
 
     if snapshot.get("intervention_needed"):
         print("[ToT] 🛡️ Shadow Run Complete. Skipping final broadcast & persistence.")
