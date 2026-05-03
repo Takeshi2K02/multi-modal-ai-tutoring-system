@@ -63,9 +63,12 @@ desktop.ini
 # Environment variables
 .env
 .env.local
+.env.production
 .env.*.local
 
-# Project specific transients
+# Secrets and JSON
+*.json
+secrets/*.json
 edusynth-agent.json
 system_diagnostic_report.txt
 tot_verification_trace.txt
