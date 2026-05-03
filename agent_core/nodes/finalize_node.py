@@ -195,6 +195,7 @@ async def finalize_output(state: AgentState) -> AgentState:
         print("[ToT] 📝 --- Attempting Final Synthesis (Fallback) ---")
         
         try:
+            s_start = time.time()
             chain = synthesis_prompt | final_llm.bind(thinking_config={"include_thoughts": False, "budget_tokens": 0}) | StrOutputParser()
             full_lesson = await chain.ainvoke({
                 "query": state["user_query"],
@@ -203,6 +204,8 @@ async def finalize_output(state: AgentState) -> AgentState:
                 "mermaid_instruction": mermaid_instruction
             }, timeout=25.0)
 
+            s_duration = (time.time() - s_start) * 1000
+            print(f"[ToT] 🔬 Synthesis completed in {s_duration:.2f}ms | {len(full_lesson)} chars generated")
             print("[Pipeline] ✅ Content ready for delivery")
                 
         except Exception as e:

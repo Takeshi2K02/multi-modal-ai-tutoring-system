@@ -42,10 +42,8 @@ async def retrieve_context(state: AgentState) -> AgentState:
         # Fix 4: Normalize lookup key with strip() to match pre-fetch
         cache_key = f"rag_cache:{module_id.strip()}:{topic_id.strip()}"
         try:
-            # Fix 6: Detailed cache lookup logging
             is_found = redis_client.exists(cache_key)
-            print(f"[Cache] 🔌 Redis Connected (Read Path) | DB: 0")
-            print(f"[Cache] 🔍 Looking up key: {cache_key} | found={is_found}")
+            # Suppress heartbeat lookup logs, only log hits or misses
             
             t_start = time.time()
             cached_data = redis_client.get(cache_key)
@@ -105,8 +103,7 @@ async def retrieve_context(state: AgentState) -> AgentState:
                 blacklist = profile.get("strategy_blacklist", {}).get(state["user_query"], [])
                 estimated_reading_time = profile.get("average_reading_speed", 120)
 
-                # Fix 2: Fire timing log and return immediately
-                print(f"[Cache] ✅ Chunks deserialized in {cache_time_ms:.2f}ms — returning early")
+                # Fire timing log and return immediately
                 from agent_core.timing_utils import log_and_emit_progress
                 new_last_time = await log_and_emit_progress(state, "rag_complete", "Retrieving relevant content (Cached)")
                 
@@ -139,20 +136,17 @@ async def retrieve_context(state: AgentState) -> AgentState:
     collection_id = existing_context.get("collection_id")
     rag_results = []
     
-    print(f"[Pipeline] 🔍 Querying RAG Content Agent for: '{state['user_query']}'")
-    # Fix 1: Move heavy import and initialization inside cache-miss path only
+    # Normal search path (Cache MISS)
     from services.vector_factory import get_vector_db
     vectordb = get_vector_db()
     rag_filter = {"collection_id": collection_id} if collection_id else None
     
-    # Phase 1 Task 3: Limit to top 5 for hot-path reasoning
     rag_results = vectordb.search(state["user_query"], top_k=5, filter=rag_filter)
     
     if not rag_results and rag_filter:
-        print(f"[Pipeline] ⚠️ No results with filter. Falling back to global search.")
         rag_results = vectordb.search(state["user_query"], top_k=5, filter=None)
     
-    print(f"[Pipeline] 📚 Retrieved {len(rag_results)} chunks from Pinecone")
+    print(f"[Pipeline] 📚 RAG Cache MISS | Retrieved {len(rag_results)} chunks from Pinecone")
 
     # Fix 1: Move secondary DB lookups for Mermaid inside cache-miss (Anything non-essential skipped on hit)
     mermaid_template = None
