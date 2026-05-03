@@ -29,9 +29,13 @@ import {
     syncStudentProgress,
     handleUserFeedback,
     acceptShadowIntervention,
-    runSimulation
+    runSimulation,
+    manualPrefetch,
+    fetcher,
+    API_BASE_URL
 } from '../services/api';
 import { useAuth } from "../AuthContext";
+import useSWR from 'swr';
 
 const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
     const { userId } = useAuth();
@@ -559,6 +563,11 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
         return true;
     }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady]);
 
+    const { data: sessionData } = useSWR(
+        sessionId ? `${API_BASE_URL}/api/session/${sessionId}` : null,
+        fetcher
+    );
+
     const handleComplete = async () => {
         if (!sessionId || !topic || isCompleting) return;
         setIsCompleting(true);
@@ -583,6 +592,40 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                     correct_answers: selectedOption === content.quiz?.correct_index ? 1 : 0
                 });
             }
+
+            // Phase 2: Background Prefetch for Next Topic
+            if (sessionData?.plan?.curriculum?.structure) {
+                const structure = sessionData.plan.curriculum.structure;
+                const completedTopics = sessionData.session?.progress?.completed_topics || [];
+                
+                // Add current topic to local list for lookup
+                const currentCompleted = [...completedTopics, topic.title];
+                
+                let nextTopic = null;
+                let foundNext = false;
+                for (const lecture of structure) {
+                    for (const t of (lecture.children || [])) {
+                        if (!currentCompleted.includes(t.title)) {
+                            nextTopic = t;
+                            foundNext = true;
+                            break;
+                        }
+                    }
+                    if (foundNext) break;
+                }
+
+                if (nextTopic) {
+                    console.log(`[Prefetch] 🚀 Triggering manual prefetch for: ${nextTopic.title}`);
+                    const colId = sessionData.plan.system_metadata?.collection_id || sessionData.plan.collection_id;
+                    manualPrefetch({
+                        session_id: sessionId,
+                        topic_title: nextTopic.title,
+                        student_id: userId,
+                        collection_id: colId
+                    }).catch(err => console.error("[Prefetch] Manual trigger failed:", err));
+                }
+            }
+
             onBack();
         } catch (err) {
             console.error("Completion Error:", err);

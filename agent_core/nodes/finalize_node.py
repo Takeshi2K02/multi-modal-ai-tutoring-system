@@ -1,4 +1,4 @@
-import asyncio, re, json, time
+import asyncio, re, json, time, os
 from datetime import datetime
 from bson import ObjectId
 from langchain_core.prompts import ChatPromptTemplate
@@ -254,6 +254,40 @@ async def finalize_output(state: AgentState) -> AgentState:
             "timestamp": datetime.now()
         })
     asyncio.create_task(save_mem())
+
+    # Phase 2: Background ToT Prefetch Storage
+    if state.get("is_prefetch"):
+        try:
+            import redis, json
+            r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+            session_id = state["context_data"].get("session_id")
+            topic_id = state["context_data"].get("topic_id")
+            prefetch_key = f"prefetch_tot:{session_id}:{topic_id}"
+            
+            payload = {
+                "synthesis_id": interaction_id,
+                "student_id": state["student_id"],
+                "interaction_id": interaction_id,
+                "final_content": full_lesson,
+                "strategy": strategy_label,
+                "rag_sources": state["context_data"].get("rag_sources", []),
+                "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+                "timestamp": datetime.now().isoformat()
+            }
+            r.setex(prefetch_key, 1800, json.dumps(payload))
+            print(f"[Prefetch] ✅ Background ToT result stored in Redis | key: {prefetch_key}")
+        except Exception as e:
+            print(f"[Prefetch] ⚠️ Failed to store prefetch in Redis: {e}")
+        
+        # Skip socket emission during prefetch run
+        return {
+            **state,
+            "final_response": full_lesson,
+            "full_text": full_lesson,
+            "body_text": full_lesson,
+            "synthesis_locked": True,
+            "interaction_id": interaction_id
+        }
 
     await sio.emit("tot_final", {
         "student_id": state["student_id"],

@@ -56,6 +56,9 @@ import bcrypt
 # Initialize FastAPI
 fastapi_app = FastAPI()
 
+# Track active ToT tasks to prevent stale lock blocking
+active_prefetch_tasks = set()
+
 # --- Auth Configuration ---
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
 ALGORITHM = "HS256"
@@ -408,12 +411,13 @@ async def shutdown_event():
         print(f"Cleanup warning: {e}")
 
 class ScenarioRequest(BaseModel):
-    scenario: str # "confused" | "bored"
+    scenario: str = "neutral" # "confused" | "bored" | "neutral"
     topic_title: Optional[str] = None
     topic_content: Optional[str] = None
     synthesis_id: Optional[str] = None
     session_id: Optional[str] = None # Issue 2: For collection_id resolution
     collection_id: Optional[str] = None # Phase 21: RAG Isolation
+    student_id: Optional[str] = None
 
 class DecomposeRequest(BaseModel):
     goal: str
@@ -423,6 +427,8 @@ class GraphResponse(BaseModel):
     nodes: List[Dict[str, Any]]
     edges: List[Dict[str, Any]]
     meta: Dict[str, Any]
+
+
 
 class SavePlanRequest(BaseModel):
     plan_data: Dict[str, Any]
@@ -634,6 +640,71 @@ async def get_session(session_id: str):
     if not data:
         raise HTTPException(status_code=404, detail="Session not found")
     
+    # Phase 2 Task 1: Trigger Background ToT for first subtopic
+    try:
+        plan = data.get("plan", {})
+        session_id_str = str(data.get("session", {}).get("_id"))
+        student_id = data.get("session", {}).get("student_id")
+        collection_id = plan.get("system_metadata", {}).get("collection_id")
+        
+        # Get first uncompleted subtopic
+        structure = plan.get("curriculum", {}).get("structure", [])
+        completed_topics = data.get("session", {}).get("progress", {}).get("completed_topics", [])
+        
+        target_topic = None
+        for lecture in structure:
+            for topic in lecture.get("children", []):
+                if topic.get("title") not in completed_topics:
+                    target_topic = topic.get("title")
+                    break
+            if target_topic:
+                break
+                
+        if target_topic and session_id_str and student_id:
+            # Fix 1: Synchronous Deduplication Guard (Refined)
+            import redis
+            r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+            lock_key = f"prefetch_tot_lock:{session_id_str}:{target_topic}"
+            result_key = f"prefetch_tot:{session_id_str}:{target_topic}"
+            task_key = f"{session_id_str}:{target_topic}"
+            
+            lock_exists = r.exists(lock_key)
+            result_exists = r.exists(result_key)
+
+            if lock_exists and result_exists:
+                remaining_ttl = r.ttl(result_key)
+                max_ttl = 1800 # 30 min as set in finalize_node.py
+                age_seconds = max_ttl - remaining_ttl
+                
+                if age_seconds > 300:
+                    print(f"[Prefetch] 🔄 Stale result detected (age={age_seconds}s) — invalidating and re-triggering for session={session_id_str}")
+                    r.delete(lock_key, result_key)
+                else:
+                    print(f"[Prefetch] ⏭️ Fresh result cached for session={session_id_str} (age={age_seconds}s) — skipping")
+                    raise StopIteration
+            
+            elif lock_exists and not result_exists:
+                if task_key not in active_prefetch_tasks:
+                    print(f"[Prefetch] 🔄 Stale lock detected (no task running) — deleting lock and re-triggering for session={session_id_str}")
+                    r.delete(lock_key)
+                else:
+                    print(f"[Prefetch] ⏳ Background ToT in progress for session={session_id_str} — skipping")
+                    raise StopIteration
+
+            print(f"[Prefetch] 🚀 Background ToT started for session={session_id_str} topic={target_topic}")
+            r.setex(lock_key, 2100, "locked") # 35 min TTL
+            active_prefetch_tasks.add(task_key)
+            asyncio.create_task(trigger_background_tot(
+                student_id=student_id,
+                session_id=session_id_str,
+                topic_id=target_topic,
+                collection_id=collection_id
+            ))
+    except StopIteration:
+        pass
+    except Exception as e:
+        print(f"[Prefetch] ⚠️ Failed to trigger initial ToT: {e}")
+
     # Phase 1 Task 3: Trigger Background RAG Pre-fetch
     try:
         plan = data.get("plan", {})
@@ -668,6 +739,120 @@ async def get_session(session_id: str):
         print(f"[Cache] Pre-fetch trigger failed: {e}")
 
     return data
+
+@fastapi_app.post("/api/prefetch")
+async def manual_prefetch(req: Dict[str, str]):
+    """
+    Phase 2 Task 4: Manual prefetch trigger for next topic.
+    """
+    session_id = req.get("session_id")
+    topic_id = req.get("topic_id") or req.get("topic_title")
+    student_id = req.get("student_id") # Optional, fallback to session lookup if needed
+    
+    if not session_id or not topic_id:
+        raise HTTPException(status_code=400, detail="session_id and topic_id/topic_title required")
+    
+    print(f"[Prefetch] 🔄 Manual prefetch triggered for next topic={topic_id}")
+    
+    # Resolve collection_id if not provided
+    collection_id = req.get("collection_id")
+    if not collection_id:
+        db = get_db_connection()
+        from bson import ObjectId
+        session_doc = db.learning_sessions.find_one({"_id": ObjectId(session_id)})
+        if session_doc:
+            plan_doc = db.learning_plans.find_one({"_id": session_doc.get("plan_id")})
+            if plan_doc:
+                collection_id = plan_doc.get("system_metadata", {}).get("collection_id") or plan_doc.get("collection_id")
+    
+    # Fix 1: Synchronous Deduplication Guard (Refined)
+    import redis
+    r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+    lock_key = f"prefetch_tot_lock:{session_id}:{topic_id}"
+    result_key = f"prefetch_tot:{session_id}:{topic_id}"
+    
+    lock_exists = r.exists(lock_key)
+    result_exists = r.exists(result_key)
+    task_key = f"{session_id}:{topic_id}"
+
+    if lock_exists and result_exists:
+        print(f"[Prefetch] ⏭️ Result already cached for session={session_id} — skipping")
+        return {"status": "Already cached"}
+        
+    elif lock_exists and not result_exists:
+        if task_key not in active_prefetch_tasks:
+            print(f"[Prefetch] 🔄 Stale lock detected (no task running) — deleting lock and re-triggering for session={session_id}")
+            r.delete(lock_key)
+        else:
+            print(f"[Prefetch] ⏳ Background ToT in progress for session={session_id} — skipping")
+            return {"status": "In progress"}
+
+    print(f"[Prefetch] 🚀 Background ToT started for session={session_id} topic={topic_id}")
+    r.setex(lock_key, 2100, "locked") # 35 min TTL
+    active_prefetch_tasks.add(task_key)
+    asyncio.create_task(trigger_background_tot(
+        student_id=student_id or "prefetch_user",
+        session_id=session_id,
+        topic_id=topic_id,
+        collection_id=collection_id
+    ))
+    
+    return {"status": "Prefetch started"}
+
+async def trigger_background_tot(student_id: str, session_id: str, topic_id: str, collection_id: str):
+    """
+    Helper to run ToT in background and store in Redis.
+    """
+    task_key = f"{session_id}:{topic_id}"
+    try:
+        print(f"[Prefetch] 🚀 Background ToT task initiated for session={session_id} topic={topic_id}")
+        start_time = time.time()
+        
+        # Reuse run_simulation logic by constructing a request
+        req = ScenarioRequest(
+            scenario="confused",
+            topic_title=topic_id,
+            synthesis_id=f"syn-{int(time.time()*1000)}", # Temporary ID for trace
+            collection_id=collection_id,
+            session_id=session_id,
+            student_id=student_id
+        )
+        
+        # We need to pass a flag to tell the graph it's a prefetch
+        # I'll modify run_simulation to accept an is_prefetch flag or handle it via a wrapper
+        await run_simulation(req, user_id=student_id, is_prefetch=True)
+        
+        duration = int((time.time() - start_time) * 1000)
+        print(f"[Prefetch] ✅ Background ToT complete for session={session_id} | stored in Redis | duration={duration}ms")
+        
+    except Exception as e:
+        print(f"[Prefetch] ⚠️ Background ToT failed for session={session_id}: {e}")
+    finally:
+        active_prefetch_tasks.discard(task_key)
+
+@fastapi_app.get("/api/prefetch/status")
+async def prefetch_status(session_id: str, topic_id: str):
+    """
+    Lightweight endpoint for the frontend to poll ToT prefetch readiness.
+    """
+    try:
+        import redis
+        r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+        result_key = f"prefetch_tot:{session_id}:{topic_id}"
+        
+        ttl = r.ttl(result_key)
+        
+        # Redis ttl returns -1 if key exists but has no expiry, -2 if key doesn't exist
+        if ttl > 0 or ttl == -1:
+            max_ttl = 1800
+            age = max_ttl - ttl if ttl > 0 else 0
+            return {"ready": True, "age_seconds": age}
+        else:
+            return {"ready": False, "age_seconds": 0}
+            
+    except Exception as e:
+        print(f"[Prefetch] ⚠️ Status check failed: {e}")
+        return {"ready": False, "age_seconds": 0}
 
 @fastapi_app.post("/api/session/exit")
 async def exit_session(req: Dict[str, str]):
@@ -842,17 +1027,50 @@ def transform_state_to_graph(state: AgentState) -> GraphResponse:
     )
 
 @fastapi_app.post("/api/run_sim", response_model=GraphResponse)
-async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_current_user)):
+async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_current_user), is_prefetch: bool = False):
     print(f"\n[Pipeline] 🚀 Start Learning Triggered for user: {user_id}")
     print(f"[Pipeline] 🎯 Target Topic: {req.topic_title or 'Default'}")
     
-    student_id = req.student_id if hasattr(req, 'student_id') else user_id
-    
+    student_id = req.student_id if req.student_id else user_id
+    session_id = req.session_id or req.synthesis_id
+
+    # Phase 2 Task 2: Check for Prefetched Result
+    if not is_prefetch and session_id and req.topic_title:
+        try:
+            import redis, json
+            r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+            prefetch_key = f"prefetch_tot:{session_id}:{req.topic_title}"
+            cached_result = r.get(prefetch_key)
+            
+            if cached_result:
+                payload = json.loads(cached_result)
+                # Calculate age
+                cached_time = datetime.fromisoformat(payload.get("timestamp", datetime.now().isoformat()))
+                age = int((datetime.now() - cached_time).total_seconds())
+                
+                print(f"[Prefetch] ⚡ Serving prefetched ToT result for session={session_id} topic={req.topic_title} | age={age}s")
+                
+                # Fix: Frontend synthesis_complete handler expects 'full_text' key for rendering
+                payload["full_text"] = payload.get("final_content")
+                
+                # Fix 1: Observability Log
+                print(f"[Prefetch] 📤 Emitting payload keys: {list(payload.keys())}")
+                
+                # Emit immediately
+                await sio.emit("synthesis_complete", payload)
+                
+                # Delete key after serving
+                r.delete(prefetch_key)
+                
+                return GraphResponse(nodes=[], edges=[], meta={"prefetched": True})
+            else:
+                print(f"[Prefetch] ⏳ Prefetch not ready for session={session_id} — running pipeline live")
+        except Exception as e:
+            print(f"[Prefetch] ⚠️ Error during prefetch lookup: {e}")
+
     # --- Resolution chain: session → plan → collection_id ---
     db = get_db_connection()
     resolved_collection_id = None
-
-    session_id = req.session_id or req.synthesis_id
 
     if not session_id:
         print(f"[Pipeline] ❌ No session_id in request for {student_id}")
@@ -969,7 +1187,8 @@ async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_curren
         "interaction_outcome": None,
         "interaction_id": req.synthesis_id,
         "start_time": start_time,
-        "last_phase_time": start_time
+        "last_phase_time": start_time,
+        "is_prefetch": is_prefetch
     }
     
     # Run Agent
@@ -987,12 +1206,13 @@ async def run_simulation(req: ScenarioRequest, user_id: str = Depends(get_curren
         print(f"[EduSynth Timing] TOTAL duration_ms={total_duration}")
         
         # --- ISSUE 6: Emit final delivery_complete event ---
-        await sio.emit("progress", {
-            "synthesis_id": req.synthesis_id,
-            "phase": "delivery_complete",
-            "message": "Lesson ready",
-            "elapsed_ms": total_duration
-        }, room=student_id)
+        if not is_prefetch:
+            await sio.emit("progress", {
+                "synthesis_id": req.synthesis_id,
+                "phase": "delivery_complete",
+                "message": "Lesson ready",
+                "elapsed_ms": total_duration
+            }, room=student_id)
 
         return transform_state_to_graph(final_state)
     except asyncio.TimeoutError:

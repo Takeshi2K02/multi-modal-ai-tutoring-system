@@ -84,3 +84,4 @@ class AgentState(TypedDict):
     current_modality: Optional[str]
     start_time: float # Project ID: 25-26J-130: Timing & Progress
     last_phase_time: float # Project ID: 25-26J-130
+    is_prefetch: bool # Phase 2: Background pre-generation
