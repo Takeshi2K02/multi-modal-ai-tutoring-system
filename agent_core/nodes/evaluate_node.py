@@ -218,8 +218,11 @@ OUTPUT: Pure Markdown text with multimodal tags.
                 blueprint_trace = " -> ".join([n.content for n in path_to_best])
 
                 try:
-                    synth_llm = get_llm()
-                    # Do NOT disable thinking for synthesis as requested
+                    # Fix 3: Force thinking_budget=0 by creating a dedicated synthesis instance
+                    # We use get_llm() but immediately bind to ensure no thinking overhead
+                    base_llm = get_llm()
+                    synth_llm = base_llm.bind(thinking_config={"include_thoughts": False, "budget_tokens": 0})
+                    
                     chain = synthesis_prompt | synth_llm | StrOutputParser()
                     payload = await chain.ainvoke({
                         "query": state["user_query"],
@@ -310,16 +313,19 @@ JSON OUTPUT FORMAT (STRICT):
                     # Bug 4: Disable thinking for scoring only
                     scoring_llm = llm.bind(thinking_config={"include_thoughts": False, "budget_tokens": 0})
                     
+                    # Fix: Format the prompt into a string before passing to the LLM to avoid 'Invalid input type <class dict>' error
+                    formatted_prompt = combined_prompt.format(
+                        query=state["user_query"],
+                        snapshot=json.dumps(snapshot),
+                        profile=str(state["profile"]),
+                        rl_strategy=snapshot.get("rl_strategy"),
+                        trend=snapshot.get("engagement_trend"),
+                        content=node.content,
+                        metadata=str(node.metadata)
+                    )
+                    
                     raw_res = await asyncio.wait_for(
-                        scoring_llm.ainvoke({
-                            "query": state["user_query"],
-                            "snapshot": json.dumps(snapshot),
-                            "profile": str(state["profile"]),
-                            "rl_strategy": snapshot.get("rl_strategy"),
-                            "trend": snapshot.get("engagement_trend"),
-                            "content": node.content,
-                            "metadata": str(node.metadata)
-                        }),
+                        scoring_llm.ainvoke(formatted_prompt),
                         timeout=15.0
                     )
                     

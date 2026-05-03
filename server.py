@@ -637,15 +637,25 @@ async def get_session(session_id: str):
     # Phase 1 Task 3: Trigger Background RAG Pre-fetch
     try:
         plan = data.get("plan", {})
+        plan_id = str(plan.get("_id"))
         collection_id = plan.get("system_metadata", {}).get("collection_id")
-        if collection_id:
-            # We pre-fetch for all topics in the plan
-            topics = []
-            for lecture in plan.get("curriculum", {}).get("structure", []):
-                for topic in lecture.get("children", []):
-                    topics.append(topic.get("title"))
+        if collection_id and plan_id:
+            # Fix 4: Deduplication guard using Redis
+            import redis
+            r = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
+            lock_key = f"prefetch_lock:{plan_id}"
             
-            asyncio.create_task(prefetch_rag_to_redis(collection_id, topics, str(plan.get("_id"))))
+            if r.exists(lock_key):
+                print(f"[Cache] ⏭️ Pre-fetch already complete for plan {plan_id} — skipping")
+            else:
+                r.setex(lock_key, 2100, "locked") # 35 minute TTL
+                # We pre-fetch for all topics in the plan
+                topics = []
+                for lecture in plan.get("curriculum", {}).get("structure", []):
+                    for topic in lecture.get("children", []):
+                        topics.append(topic.get("title"))
+                
+                asyncio.create_task(prefetch_rag_to_redis(collection_id, topics, plan_id))
     except Exception as e:
         print(f"[Cache] Pre-fetch trigger failed: {e}")
 

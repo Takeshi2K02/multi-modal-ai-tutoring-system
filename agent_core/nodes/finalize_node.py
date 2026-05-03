@@ -75,87 +75,92 @@ async def finalize_output(state: AgentState) -> AgentState:
     """
     Node 5: Final output generation and latency calculation.
     """
-    print("[ToT] 🏁 --- Node: Finalize Output ---")
+    # Fix 2: Move pre-computed payload check to the very top to skip all LLM work
+    best_node = state.get("best_node")
+    precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
+    
+    # Common variables needed for both paths
+    interaction_id = state.get("interaction_id")
+    tree_memory = state["tree_memory"]
+    snapshot = state["context_data"].get("snapshot", {})
+    if hasattr(snapshot, "dict"): snapshot = snapshot.dict()
     
     # 1. ATOMIC SELECTION GUARD (Phase 19)
     if state.get("synthesis_locked"):
         print("[ToT] ⚠️ --- BLOCKED: Synthesis already in progress. Ignoring duplicate call. ---")
         return state
         
-    best_node = state.get("best_node")
     if not best_node or best_node.metadata.get("pruning_status") != "Selected":
         print(f"[ToT] 🛑 --- BLOCKED: Node {best_node.id if best_node else 'N/A'} is NOT 'Selected'. Returning. ---")
         return state
 
-    # LOCK PATH FOR SYNTHESIS
-    interaction_id = state.get("interaction_id")
-    tree_memory = state["tree_memory"]
-    
-    # 2. LOGGING VALIDATION
-    sibling_count = len([n for n in tree_memory.values() if n.depth == best_node.depth]) - 1
-    print(f"[Finalizer] --- LOCKED PATH: {best_node.id} | Discarding {sibling_count} sibling payloads ---")
-
-    # Calculate build_time telemetry
     start_time = state.get("build_time", time.time())
-    
-    path = []
-    curr = best_node
-    while curr:
-        path.append(curr)
-        curr = tree_memory.get(curr.parent_id) if curr.parent_id else None
-    path.reverse()
-    
-    trace = [f"[{n.depth}] {n.content} (Score: {n.path_score:.2f})" for n in path]
-    
-    # Map RL Action ID to Strategy Label (Project ID: 25-26J-130)
-    snapshot = state["context_data"].get("snapshot", {})
-    if hasattr(snapshot, "dict"): snapshot = snapshot.dict()
-    
-    action_id = snapshot.get("action_id", 0)
-    strategy_label = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown Strategy").upper().replace(" ", "_")
-    
-    # Project ID: 25-26J-130: Mandatory LLM Synthesis Step
-    # Expand the selected thought into a full multimodal lesson
-    final_llm = get_llm()
-    
-    # Task 2: Pre-built Mermaid Integration
-    prebuilt_mermaid = state["context_data"].get("prebuilt_mermaid")
-    mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}" if prebuilt_mermaid else "Include a [MERMAID_START] diagram with [MERMAID_END] tags as per requirements."
 
-    synthesis_prompt = ChatPromptTemplate.from_template("""
-        Role: Senior Pedagogical Architect.
-        Context: {query}
-        Selected Strategy Path (Blueprints): {thought}
-        Strategy Label: {strategy}
+    if precomputed_payload:
+        print(f"[Finalizer] ✅ Using pre-computed synthesis payload for node {best_node.id} — skipping ALL LLM logic.")
+        full_lesson = precomputed_payload
+        trace = ["Pre-computed synthesis used."]
         
-        TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a comprehensive multimodal lesson.
+        # Determine strategy label
+        action_id = snapshot.get("action_id", 0)
+        strategy_label = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown Strategy").upper().replace(" ", "_")
         
-        REQUIREMENTS:
-        1. Start with a specific analogy: THE SUPERMARKET RECEIPT ANALOGY. 
-           (CRITICAL: Do NOT use ANY other analogies).
-        2. Expand on the technical methodologies mentioned in the blueprints.
-        3. Explain 3 key technical terms related to Dimensional Modelling (Facts, Dimensions, Grain).
-        4. {mermaid_instruction}
-           - If generating a new diagram: Central Node MUST be 'FactReceiptLineItem', surround with 5 dimensions, Star Schema.
-        5. Use BI terminology (Facts, Dimensions, Star Schemas).
-        6. Maintain an encouraging, professional tone.
+        # Assign outcome metrics
+        latency = time.time() - start_time
+        initial_score = snapshot.get("current_affect", {}).get("score", 0.5)
+        simulated_final_score = min(1.0, initial_score + 0.2) if best_node.path_score > 0.8 else initial_score
+        outcome = "Improved" if simulated_final_score > initial_score else "Stable"
+        is_high_confidence = simulated_final_score >= 0.85
+        estimated_reading_time = state.get("estimated_reading_time", 30)
+    else:
+        print("[ToT] 🏁 --- Node: Finalize Output ---")
         
-        OUTPUT: Pure Markdown text with multimodal tags.
-    """)
-    
-    # Trace the full path content for synthesis context
-    blueprint_trace = " -> ".join([n.content for n in path])
-    
-    # Bug 2: Check for precomputed synthesis payload from evaluate_node.py
-    precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
-    
-    try:
-        if precomputed_payload:
-            print(f"[Finalizer] ✅ Using pre-computed synthesis payload for node {best_node.id} — skipping synthesis LLM call.")
-            full_lesson = precomputed_payload
-        else:
-            print("[ToT] 📝 --- Attempting Final Synthesis (Fallback) ---")
-            chain = synthesis_prompt | final_llm | StrOutputParser()
+        # LOCK PATH FOR SYNTHESIS
+        sibling_count = len([n for n in tree_memory.values() if n.depth == best_node.depth]) - 1
+        print(f"[Finalizer] --- LOCKED PATH: {best_node.id} | Discarding {sibling_count} sibling payloads ---")
+
+        path = []
+        curr = best_node
+        while curr:
+            path.append(curr)
+            curr = tree_memory.get(curr.parent_id) if curr.parent_id else None
+        path.reverse()
+        
+        trace = [f"[{n.depth}] {n.content} (Score: {n.path_score:.2f})" for n in path]
+        
+        # Map RL Action ID to Strategy Label
+        action_id = snapshot.get("action_id", 0)
+        strategy_label = RL_ACTION_MAP.get(action_id, {}).get("name", "Unknown Strategy").upper().replace(" ", "_")
+        
+        # Project ID: 25-26J-130: Mandatory LLM Synthesis Step
+        final_llm = get_llm()
+        
+        # Task 2: Pre-built Mermaid Integration
+        prebuilt_mermaid = state["context_data"].get("prebuilt_mermaid")
+        mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}" if prebuilt_mermaid else "Include a [MERMAID_START] diagram with [MERMAID_END] tags as per requirements."
+
+        synthesis_prompt = ChatPromptTemplate.from_template("""
+            Role: Senior Pedagogical Architect.
+            Context: {query}
+            Selected Strategy Path (Blueprints): {thought}
+            Strategy Label: {strategy}
+            
+            TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a comprehensive multimodal lesson.
+            
+            REQUIREMENTS:
+            1. Start with THE SUPERMARKET RECEIPT ANALOGY. 
+            2. Expand on the technical methodologies.
+            3. Explain 3 terms: Facts, Dimensions, Grain.
+            4. {mermaid_instruction}
+            
+            OUTPUT: Pure Markdown.
+        """)
+        
+        blueprint_trace = " -> ".join([n.content for n in path])
+        print("[ToT] 📝 --- Attempting Final Synthesis (Fallback) ---")
+        
+        try:
+            chain = synthesis_prompt | final_llm.bind(thinking_config={"include_thoughts": False, "budget_tokens": 0}) | StrOutputParser()
             full_lesson = await chain.ainvoke({
                 "query": state["user_query"],
                 "thought": blueprint_trace,
@@ -163,120 +168,52 @@ async def finalize_output(state: AgentState) -> AgentState:
                 "mermaid_instruction": mermaid_instruction
             }, timeout=25.0)
 
-        print("[Pipeline] ✅ Content ready for delivery")
-        
-        # Enhanced Logging
-        print(f"[ToT] >>> Final Content Payload ({len(full_lesson)} chars)")
-        
-        # Project ID: 25-26J-130: Mermaid Syntax Repair Filter
-        # Strips all Markdown formatting (bolding, etc) from inside mermaid blocks
-        def repair_mermaid(text):
-            def clean_mermaid(match):
-                inner = match.group(1)
-                # Strip markdown bolding/italics
-                inner = re.sub(r"\*\*|\_\_", "", inner)
-                # Strip leading/trailing whitespace
-                return f"[MERMAID_START]\n{inner.strip()}\n[MERMAID_END]"
-            return re.sub(r"\[MERMAID_START\](.*?)\[MERMAID_END\]", clean_mermaid, text, flags=re.DOTALL)
-        
-        full_lesson = repair_mermaid(full_lesson)
-        
-        # Project ID: 25-26J-130: RAG Verification Audit
-        rag_sources = state["context_data"].get("rag_sources", [])
-        print(f"[ToT] 📚 --- RAG Source Audit (Count: {len(rag_sources)}): {rag_sources}")
-        
-        # Content Synthesis Validation
-        if not full_lesson or not isinstance(full_lesson, str) or len(full_lesson.strip()) == 0:
-            raise ValueError("LLM returned empty body_text")
+            print("[Pipeline] ✅ Content ready for delivery")
+            def repair_mermaid(text):
+                def clean_mermaid(match):
+                    inner = match.group(1)
+                    inner = re.sub(r"\*\*|\_\_", "", inner)
+                    return f"[MERMAID_START]\n{inner.strip()}\n[MERMAID_END]"
+                return re.sub(r"\[MERMAID_START\](.*?)\[MERMAID_END\]", clean_mermaid, text, flags=re.DOTALL)
             
-    except Exception as e:
-        print(f"Synthesis Failed: {e}")
-        # HARDCODED FALLBACK LESSON (Project ID: 25-26J-130)
-        full_lesson = f"""
-### 🧩 Fallback Lesson: Understanding {state['user_query']}
+            full_lesson = repair_mermaid(full_lesson)
+            if not full_lesson or not isinstance(full_lesson, str) or len(full_lesson.strip()) == 0:
+                raise ValueError("LLM returned empty body_text")
+            
+            initial_affect = snapshot.get("current_affect", {})
+            initial_score = initial_affect.get("score", 0.5)
+            simulated_final_score = min(1.0, initial_score + 0.2) if best_node and best_node.path_score > 0.8 else initial_score
+            outcome = "Improved" if simulated_final_score > initial_score else "Stable"
+            is_high_confidence = simulated_final_score >= 0.85
+            latency = time.time() - start_time
+            estimated_reading_time = calculate_lesson_benchmark(full_lesson, state.get("profile", {}), topic=state["user_query"])
+                
+        except Exception as e:
+            print(f"Synthesis Failed: {e}")
+            full_lesson = f"### 🧩 Fallback Lesson: Understanding {state['user_query']}\n\nTechnical hiccup occurred. {state['user_query']} is a key concept in BI."
+            outcome = "Stable"
+            is_high_confidence = False
+            latency = 0
+            estimated_reading_time = 30
 
-It looks like we hit a technical hiccup, but don't worry! Here's a quick overview of **{state['user_query']}** to keep you moving forward.
-
-**The Analogy**: Think of this concept like a **Blueprint**. Before you build a skyscraper (your BI Architecture), you need a clear map of where every beam and wire goes.
-
-**Key Concepts**:
-1. **Facts**: The quantitative measurements (e.g., Total Sales).
-2. **Dimensions**: The context (e.g., Date, Product, Store).
-3. **Grain**: The level of detail (e.g., individual transaction vs. daily total).
-
-[MERMAID_START]
-graph TD
-  A[Concept: {state['user_query']}] --> B[Core Logic]
-  B --> C[Practical Application]
-  C --> D[Ready to Proceed]
-[MERMAID_END]
-
-*Our AI is currently re-calibrating to provide a more personalized path. Let's start with this foundational view.*
-"""
-
-    # Compute Outcome simulation
-    initial_affect = snapshot.get("current_affect", {})
-    initial_score = initial_affect.get("score", 0.5)
-    
-    simulated_final_score = initial_score
-    if best_node and best_node.path_score > 0.8:
-        simulated_final_score = min(1.0, initial_score + 0.2)
-    
-    # Simple outcome comparison
-    outcome = "Improved" if simulated_final_score > initial_score else "Stable"
-    
-    # Project ID: 25-26J-130: RL Reinforcement - Flag high-confidence examples
-    is_high_confidence = simulated_final_score >= 0.85
-    
-    # Interaction ID is already generated in retrieve_context (Project ID: 25-26J-130)
-    interaction_id = state.get("interaction_id")
-
-    # Recalculate latency after full_lesson is generated
-    latency = time.time() - start_time
-    
-    # --- INTERVENTION HARDENING (Project ID: 25-26J-130) ---
-    word_count = len(full_lesson.split())
-    estimated_reading_time = calculate_lesson_benchmark(
-        full_lesson, 
-        state.get("profile", {}), 
-        topic=state["user_query"]
-    )
-    
-    print(f"[Intervention] --- Benchmark Set: {estimated_reading_time}s for {word_count} words ---")
-    
-    # Cleanup: Clear shadow_frontier once output is finalized to prevent leaks
-    shadow_frontier = []
-    
-    # Save Interaction with CV/Branch Metadata (Project ID: 25-26J-130)
-    # ASYNC DECOUPLING: Move persistence to background task
-    # Project ID: 25-26J-130: Intervention Guard
-    # If this is a shadow run (intervention_needed), DO NOT emit tot_final or save interaction.
-    # The user must click "Yes, Switch" to apply this content.
     if snapshot.get("intervention_needed"):
         print("[ToT] 🛡️ Shadow Run Complete. Skipping final broadcast & persistence.")
-        return {
-            **state,
-            "final_response": full_lesson,
-            "body_text": full_lesson
-        }
+        return {**state, "final_response": full_lesson, "body_text": full_lesson}
 
     async def save_mem():
         memory = MemoryManager()
-        
-        # Project ID: 25-26J-130: Robust ID handling for syn-* strings
         try:
             db_id = ObjectId(interaction_id)
         except Exception:
             db_id = interaction_id
-
         memory.save_interaction({
-            "_id": db_id, # Ensure we use the same ID
+            "_id": db_id,
             "student_id": state["student_id"],
             "query": state["user_query"],
             "strategy": strategy_label,
             "branch_id": best_node.id if best_node else None,
             "path_score": best_node.path_score if best_node else 0.0,
-            "engagement_score": snapshot.get("current_affect", {}).get("score", 0.5), # Audit Requirement
+            "engagement_score": snapshot.get("current_affect", {}).get("score", 0.5),
             "outcome": outcome,
             "trace": trace,
             "high_confidence": is_high_confidence,
@@ -287,7 +224,6 @@ graph TD
         })
     asyncio.create_task(save_mem())
 
-    # Final broadcast to Admin Dashboard
     await sio.emit("tot_final", {
         "student_id": state["student_id"],
         "final_response": full_lesson,
@@ -303,11 +239,7 @@ graph TD
         "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL"
     })
 
-    # --- PAYLOAD PURGE (Phase 19) ---
-    # Clear the 'handoff_buffer' immediately after the first 'Finalize Output' call
-    # and mark synthesis as locked to prevent duplicate Socket.IO emissions.
     updated_handoff = []
-    
     await sio.emit("synthesis_complete", {
         "synthesis_id": interaction_id,
         "student_id": state["student_id"],
@@ -335,7 +267,7 @@ graph TD
         "interaction_id": interaction_id,
         "build_time": latency,
         "estimated_reading_time": estimated_reading_time,
-        "shadow_frontier": shadow_frontier,
+        "shadow_frontier": [],
         "synthesis_locked": True,
         "handoff_buffer": updated_handoff,
         "last_phase_time": new_last_time
