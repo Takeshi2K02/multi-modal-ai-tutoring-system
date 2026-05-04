@@ -40,6 +40,11 @@ class EngagementModel:
         self.face_landmarker = None
         self.pose_landmarker = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Project ID: 25-26J-130: Log Throttling
+        self._last_face_error_time = 0
+        self._last_pose_error_time = 0
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+        os.environ['GLOG_minloglevel'] = '2'
         
     def load_model(self):
         """Load all sub-models"""
@@ -510,7 +515,10 @@ class EngagementModel:
             lm = self._get_face_landmarks(frame)
             
             if lm is None:
-                print(f"⚠️ No face detected for gaze | shape:{frame.shape} mean:{frame.mean():.0f}")
+                import time
+                if time.time() - self._last_face_error_time > 30:
+                    print(f"⚠️ No face detected for gaze | shape:{frame.shape} mean:{frame.mean():.0f}")
+                    self._last_face_error_time = time.time()
                 return 'away'
             
             # === HEAD POSE via key landmark positions ===
@@ -644,7 +652,10 @@ class EngagementModel:
                 # print(f"🧍 Posture(face): {posture:>15} | face_y:{face_center_y:.3f} face_x:{face_center_x:.3f} tilt:{face_tilt:.3f} z:{nose_z:.3f}")
                 return posture
             
-            print(f"⚠️ No pose/face detected for posture | shape:{frame.shape} mean:{frame.mean():.0f}")
+            import time
+            if time.time() - self._last_pose_error_time > 30:
+                print(f"⚠️ No pose/face detected for posture | shape:{frame.shape} mean:{frame.mean():.0f}")
+                self._last_pose_error_time = time.time()
             return 'unknown'
                 
         except Exception as e:

@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Brain, Sparkles, ChevronRight, ChevronLeft, Activity, User, ShieldCheck, Zap, PanelLeftClose, PanelRightClose, PanelLeft, PanelRight } from 'lucide-react';
-import { io } from 'socket.io-client';
 import TreeVisualizer from '../components/Graph/TreeVisualizer';
 import StudentProfilePanel from '../components/StudentProfilePanel';
-
-const socket = io('http://localhost:8000');
+import { socket } from '../services/socket';
 
 const ReasoningTerminal = ({ logs, leftExpanded, rightExpanded }) => {
     const terminalRef = React.useRef(null);
@@ -60,13 +58,13 @@ const AgentDebugger = ({ context, onComplete }) => {
 
     // 1. Real-time Node Discovery & Reasoning Listeners
     useEffect(() => {
-        socket.on('tot_step', (data) => {
+        const handleTotStep = (data) => {
             if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
             setCurrentStep(data);
             if (data.step) setStatus(data.step.replace(/_/g, ' '));
-        });
+        };
 
-        socket.on('node_discovered', (node) => {
+        const handleNodeDiscovered = (node) => {
             if (context?.synthesis_id && node.synthesis_id !== context.synthesis_id) return;
 
             setNodes((prev) => {
@@ -114,29 +112,29 @@ const AgentDebugger = ({ context, onComplete }) => {
                     ];
                 });
             }
-        });
+        };
 
-        socket.on('thought_stream', (data) => {
+        const handleThoughtStream = (data) => {
             if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
             setThoughtStream(prev => [...prev.slice(-49), { source: data.source, content: data.content }]);
-        });
+        };
 
-        socket.on('cv_update', (data) => {
+        const handleCvUpdate = (data) => {
             setCvMetrics({
                 emotion: data.emotion,
                 score: data.engagement_score,
                 gaze: data.gaze,
                 posture: data.posture
             });
-        });
+        };
 
-        socket.on('policy_update', (data) => {
+        const handlePolicyUpdate = (data) => {
             setRlPolicy(data.distribution);
-        });
+        };
 
-        socket.on('path_selected', (data) => {
+        const handlePathSelected = (data) => {
             if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
-            console.log(">>> [Debugger] 🏆 path_selected:", data.id);
+            if (import.meta.env.DEV) console.log(">>> [Debugger] 🏆 path_selected:", data.id);
             setNodes((prev) => prev.map(n => n.id === data.id ? {
                 ...n,
                 data: {
@@ -144,11 +142,11 @@ const AgentDebugger = ({ context, onComplete }) => {
                     metadata: { ...n.data.metadata, pruning_status: 'Selected' }
                 }
             } : n));
-        });
+        };
 
-        socket.on('synthesis_complete', (data) => {
+        const handleSynthesisComplete = (data) => {
             if (context?.synthesis_id && data.synthesis_id !== context.synthesis_id) return;
-            console.log(">>> [Debugger] 🏁 synthesis_complete received:", data.synthesis_id);
+            if (import.meta.env.DEV) console.log(">>> [Debugger] 🏁 synthesis_complete received:", data.synthesis_id);
             setFinalPayload(data);
             setIsComplete(true);
             setCurrentStep({ step: 'COMPLETE', message: 'Synthesis Finalized.' });
@@ -158,23 +156,31 @@ const AgentDebugger = ({ context, onComplete }) => {
                 ...n,
                 data: { ...n.data, isSynthesisComplete: true }
             })));
-        });
+        };
+
+        socket.on('tot_step', handleTotStep);
+        socket.on('node_discovered', handleNodeDiscovered);
+        socket.on('thought_stream', handleThoughtStream);
+        socket.on('cv_update', handleCvUpdate);
+        socket.on('policy_update', handlePolicyUpdate);
+        socket.on('path_selected', handlePathSelected);
+        socket.on('synthesis_complete', handleSynthesisComplete);
 
         return () => {
-            socket.off('tot_step');
-            socket.off('node_discovered');
-            socket.off('thought_stream');
-            socket.off('cv_update');
-            socket.off('policy_update');
-            socket.off('path_selected');
-            socket.off('synthesis_complete');
+            socket.off('tot_step', handleTotStep);
+            socket.off('node_discovered', handleNodeDiscovered);
+            socket.off('thought_stream', handleThoughtStream);
+            socket.off('cv_update', handleCvUpdate);
+            socket.off('policy_update', handlePolicyUpdate);
+            socket.off('path_selected', handlePathSelected);
+            socket.off('synthesis_complete', handleSynthesisComplete);
         };
     }, [context?.synthesis_id]);
 
     // 2. Automatic Handoff (Phase 20: Autonomous Topic Execution)
     useEffect(() => {
         if (isComplete && playbackFinished && finalPayload) {
-            console.log(">>> [Debugger] 🚀 Auto-redirecting to Lesson View...");
+            if (import.meta.env.DEV) console.log(">>> [Debugger] 🚀 Auto-redirecting to Lesson View...");
             const timer = setTimeout(() => handleProceed(), 1500); // Brief pause for user to see the "Finalized" state
             return () => clearTimeout(timer);
         }

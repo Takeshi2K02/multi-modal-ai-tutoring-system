@@ -10,32 +10,36 @@ import certifi
 # Use the URI from env var, mandatory for production (Project ID: 25-26J-130)
 MONGO_URI = os.getenv("MONGO_URI")
 
+_client = None
+
 def get_db_connection():
     """
     Establishes a connection to MongoDB.
     Raises ConnectionError if the database is unreachable.
     """
+    global _client
     if not MONGO_URI:
         raise ConnectionError("MONGO_URI not found in environment variables. Please check your .env file.")
 
     try:
-        # Fix: SSL only for remote connections
-        client_options = {"serverSelectionTimeoutMS": 5000}
-        if "mongodb+srv" in MONGO_URI or "ssl=true" in MONGO_URI.lower():
-            client_options["tlsCAFile"] = certifi.where()
-            client_options["tls"] = True
+        if _client is None:
+            # Fix: SSL only for remote connections
+            client_options = {"serverSelectionTimeoutMS": 5000}
+            if "mongodb+srv" in MONGO_URI or "ssl=true" in MONGO_URI.lower():
+                client_options["tlsCAFile"] = certifi.where()
+                client_options["tls"] = True
+                
+            _client = MongoClient(MONGO_URI, **client_options)
             
-        client = MongoClient(MONGO_URI, **client_options)
-        
-        # Verify connection immediately
-        client.admin.command('ping')
-        
-        # Suppress verbose pymongo logs
-        logging.getLogger('pymongo').setLevel(logging.CRITICAL)
-        
+            # Verify connection immediately
+            _client.admin.command('ping')
+            
+            # Suppress verbose pymongo logs
+            logging.getLogger('pymongo').setLevel(logging.CRITICAL)
+            
         # Resolve database name from URI if possible, or fallback to default
         db_name = MONGO_URI.split("/")[-1].split("?")[0] or "edusynth_db"
-        return client.get_database(db_name)
+        return _client.get_database(db_name)
         
     except Exception as e:
         # Crash Loudly (Requirement 1)

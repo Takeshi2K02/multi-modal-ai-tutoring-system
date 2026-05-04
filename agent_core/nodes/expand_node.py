@@ -152,21 +152,42 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 input_variables=["action_id", "rl_strategy", "pruning_logic", "query", "k"]
             )
             
+            # --- PROMPT LOGGING (Issue 1) ---
+            formatted_prompt = prompt.format(action_id=action_id, rl_strategy=rl_strategy, pruning_logic=pruning_logic, query=query, k=CONFIG.branching_factor)
+            print(f"[ToT] 🚀 Gen D1 Prompt (Chars: {len(formatted_prompt)}):\n{formatted_prompt[:500]}...")
+
             for attempt in range(max_retries):
                 raw_res = ""
+                t_start = asyncio.get_event_loop().time()
                 try:
-                    chain = prompt | llm | StrOutputParser()
-                    # PROJECT ID: 25-26J-130: Local Timeout Guard for LLM stalls
-                    raw_res = await asyncio.wait_for(
-                        chain.ainvoke({
-                            "action_id": action_id,
-                            "rl_strategy": rl_strategy,
-                            "pruning_logic": pruning_logic,
-                            "query": query, "k": CONFIG.branching_factor
-                        }),
-                        timeout=20.0
+                    # PROJECT ID: 25-26J-130: Local Timeout Guard for LLM stalls (15s as per Issue 1)
+                    raw_obj = await asyncio.wait_for(
+                        llm.ainvoke(formatted_prompt),
+                        timeout=15.0
                     )
                     
+                    # Critical 3: Log raw response metadata
+                    print(f"[DEBUG] Raw response type: {type(raw_obj)}")
+                    if hasattr(raw_obj, "content"):
+                        raw_res = raw_obj.content
+                    elif hasattr(raw_obj, "text"):
+                        raw_res = raw_obj.text
+                    else:
+                        raw_res = str(raw_obj)
+                        
+                    print(f"[DEBUG] Raw response length: {len(raw_res)} | Preview: {raw_res[:100]}...")
+                    
+                    elapsed = asyncio.get_event_loop().time() - t_start
+                    
+                    # --- EARLY EXIT CHECK (Issue 2) ---
+                    if not raw_res or len(raw_res.strip()) < 50:
+                        print(f"[ToT] ⚠️ Gen D1 returned short response ({len(raw_res)} chars) in {elapsed:.2f}s.")
+                        if elapsed < 5.0:
+                            print("[ToT] ⚡ Early Abort triggered. Retrying immediately with simpler prompt.")
+                            # Simpler prompt for retry
+                            pruning_logic = "Focus ONLY on the most basic pedagogical step."
+                        raise ValueError("Empty or too short LLM response.")
+
                     # --- REASONING TERMINAL STREAM (Project ID: 25-26J-130) ---
                     await sio.emit("thought_stream", {
                         "synthesis_id": state.get("interaction_id"),
@@ -212,7 +233,12 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                             pass
                             
                     await asyncio.sleep(base_delay * (attempt + 1))
-            return []
+            
+            print("[ToT] ⚠️ All D1 retries failed. Falling back to hardcoded branches.")
+            return [
+                {"content": "Standard Explanation", "metadata": {"type": "strategy", "strategy_type": "explanation", "strategy_name": "Standard Explanation", "internal_thought": "Fallback explanation"}},
+                {"content": "Visual Breakdown", "metadata": {"type": "strategy", "strategy_type": "visual_explanation", "strategy_name": "Visual Breakdown", "internal_thought": "Fallback visual"}}
+            ]
 
         elif target_depth == 2:
             snapshot = context.get("snapshot", {})
@@ -255,21 +281,49 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 """,
                 input_variables=["rag_evidence", "strategy", "approach", "query", "k"]
             )
+            # --- RAG CONTEXT REDUCTION (Issue 1) ---
+            full_rag = context.get("rag_evidence", "")
+            chunks = full_rag.split("\n---\n")
+            current_rag = "\n---\n".join(chunks[:5]) if len(chunks) > 5 else full_rag
+            if len(chunks) > 5:
+                print(f"[ToT] 📉 Reduced RAG context to 5 chunks for initial D2 expansion.")
+
+            # --- PROMPT LOGGING (Issue 1) ---
+            formatted_prompt = prompt.format(rag_evidence=current_rag[:500] + "...", strategy=parent_node.content, approach=parent_node.metadata.get("approach", ""), query=query, k=CONFIG.branching_factor)
+            print(f"[ToT] 🚀 Gen D2 Prompt (Chars: {len(formatted_prompt)}):\n{formatted_prompt[:500]}...")
+
             for attempt in range(max_retries):
+                raw_res = ""
+                t_start = asyncio.get_event_loop().time()
                 try:
+                    if attempt > 0:
+                        # Even further reduction on retry
+                        current_rag = "\n---\n".join(chunks[:2]) if len(chunks) > 2 else current_rag
+                        print(f"[ToT] 🔄 Reduced RAG chunks to 2 for D2 retry.")
+
                     async with semaphore:
                         chain = prompt | llm | StrOutputParser()
-                        # PROJECT ID: 25-26J-130: Local Timeout Guard for LLM stalls
+                        # PROJECT ID: 25-26J-130: 15s Timeout as per Issue 1
                         raw_res = await asyncio.wait_for(
                             chain.ainvoke({
-                                "rag_evidence": context.get("rag_evidence", ""),
+                                "rag_evidence": current_rag,
                                 "strategy": parent_node.content, 
                                 "approach": parent_node.metadata.get("approach", ""),
                                 "query": query, "k": CONFIG.branching_factor
                             }),
-                            timeout=20.0
+                            timeout=15.0
                         )
                     
+                    elapsed = asyncio.get_event_loop().time() - t_start
+
+                    # --- EARLY EXIT CHECK (Issue 2) ---
+                    if not raw_res or len(raw_res.strip()) < 50:
+                        print(f"[ToT] ⚠️ Gen D2 returned short response ({len(raw_res)} chars) in {elapsed:.2f}s.")
+                        if elapsed < 5.0:
+                            print("[ToT] ⚡ Early Abort triggered. Retrying immediately with minimal context.")
+                            # Force retry logic already handled by attempt > 0 block above
+                        raise ValueError("Empty or too short LLM response.")
+
                     # --- REASONING TERMINAL STREAM (Project ID: 25-26J-130) ---
                     await sio.emit("thought_stream", {
                         "synthesis_id": state.get("interaction_id"),
@@ -334,9 +388,25 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                         })
                     return children
                 except Exception as e:
-                    print(f"Gen D2 Failed: {e}")
+                    print(f"[ToT] ⚠️ Gen D2 Parse Failed (Attempt {attempt+1}): {e}")
+                    try:
+                        print(f"[ToT] >>> RAW_LLM_RESPONSE: {raw_res}")
+                    except:
+                        pass
                     await asyncio.sleep(base_delay * (attempt + 1))
-            return []
+            
+            print("[ToT] ⚠️ All D2 retries failed. Falling back to hardcoded branches.")
+            return [
+                {
+                    "content": f"Fallback content for {parent_node.content}",
+                    "metadata": {
+                        "strategy_name": parent_node.metadata.get("strategy_name", "Synthesis"),
+                        "internal_thought": "Fallback generated due to LLM failure",
+                        "directive": {"type": "explanation", "content": f"Fallback content for {parent_node.content}"},
+                        "type": "variation"
+                    }
+                }
+            ]
 
         elif target_depth == 3:
             # Depth 3: Evaluation & Finalized Path Selection (Project ID: 25-26J-130)

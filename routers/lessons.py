@@ -56,11 +56,13 @@ class PerformanceRecord(BaseModel):
 
 class GeneratedContentRequest(BaseModel):
     student_id: str
+    session_id: str
     topic_id: str
     content: Optional[Dict[str, Any]] = None
 
 class StudentProgressRequest(BaseModel):
     student_id: str
+    session_id: str
     topic_id: str
     content: Dict[str, Any]
     user_response: Optional[str] = None
@@ -79,10 +81,10 @@ async def save_performance(record: PerformanceRecord):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/api/lesson/content")
-async def get_lesson_content(student_id: str, topic_id: str):
+async def get_lesson_content(student_id: str, topic_id: str, session_id: Optional[str] = None):
     try:
         service = LearningSessionService()
-        content = service.get_generated_content(student_id, topic_id)
+        content = service.get_generated_content(student_id, topic_id, session_id)
         return {"content": content}
     except Exception as e:
         print(f"Get Lesson Content Error: {e}")

@@ -11,7 +11,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Install Dependencies (includes new Ollama support)
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 ### 2. Configure Provider
@@ -33,16 +33,34 @@ LLM_PROVIDER="gemini"
     OLLAMA_MODEL="llama3"
     ```
 
-### 3. Run the Agent
+### 3. Running the Application
 
-**Run CLI Demo:**
+To run the full multimodal system (Backend + Frontend):
+
+#### **Backend (FastAPI)**
+The backend handles the agentic reasoning and data persistence.
+```bash
+# Option A: Direct command
+uvicorn server:app --reload --port 8000
+
+# Option B: Use helper script (Mac/Linux)
+chmod +x start_backend.sh
+./start_backend.sh
+```
+
+#### **Frontend (React)**
+The web interface for interacting with the agent.
+```bash
+cd web-ui
+npm install # If first time
+npm run dev
+```
+
+### 4. CLI Demo (Alternative)
+Run a quick test in your terminal without the web UI:
 ```bash
 python3 main.py
 ```
-
-**Run Web Visualizer:**
-1.  **Backend**: `uvicorn server:app --reload --port 8000`
-2.  **Frontend**: `cd web-ui && npm run dev`
 
 ---
 

@@ -1,19 +1,12 @@
-import os
+import os, time
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 from agent_core.schemas import StudentStateSnapshot, RL_ACTION_MAP
 
-# Global DB connection for efficiency
-_client = None
-_db = None
+from db.connection import get_db_connection
 
 def _get_db():
-    global _client, _db
-    if _db is None:
-        mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/ai_tutor_db')
-        _client = MongoClient(mongo_uri)
-        _db = _client.get_database()
-    return _db
+    return get_db_connection()
 
 def calculate_lesson_benchmark(text: str, student_profile: dict, topic: str = "") -> int:
     """
@@ -38,7 +31,7 @@ def calculate_lesson_benchmark(text: str, student_profile: dict, topic: str = ""
     # Minimum floor of 30s
     return max(30, estimated_time)
 
-def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
+def get_student_snapshot(user_id: str, session_start_time: float = None) -> StudentStateSnapshot:
     """
     Performs a non-blocking find_one (sort by latest) for both CV and RL data.
     Calculates engagement trends and deviations.
@@ -102,37 +95,58 @@ def get_student_snapshot(user_id: str) -> StudentStateSnapshot:
 
     # 5. Intervention Trigger (Project ID: 25-26J-130)
     MAX_SESSION_S = 3600 # 1-hour session benchmark (Issue 4)
-    latest_interaction = db.interactions.find_one(
-        {"student_id": user_id},
-        sort=[("timestamp", -1)]
-    )
     
     intervention_needed = False
     session_fatigue = 0.0
     
-    if latest_interaction:
-        start_time = latest_interaction.get("timestamp", datetime.now())
-        reading_time = MAX_SESSION_S # Issue 4: Set benchmark to max_session_s
-        is_done = latest_interaction.get("is_completed", False)
-        
-        time_elapsed = (datetime.now() - start_time).total_seconds()
-        
-        # Issue 4: Calculate Normalized Fatigue
+    # Critical 2: Reset fatigue per pipeline invocation if session_start_time is provided
+    if session_start_time:
+        time_elapsed = time.time() - session_start_time
         session_fatigue = min(time_elapsed / MAX_SESSION_S, 1.0)
+    else:
+        latest_interaction = db.interactions.find_one(
+            {"student_id": user_id},
+            sort=[("timestamp", -1)]
+        )
+        
+        if latest_interaction:
+            # Get current session start time (first interaction within a continuous block, or last 2 hours)
+            two_hours_ago = datetime.now() - timedelta(hours=2)
+            session_start = db.interactions.find_one(
+                {"student_id": user_id, "timestamp": {"$gte": two_hours_ago}},
+                sort=[("timestamp", 1)]
+            )
+            start_time_db = session_start.get("timestamp") if session_start else latest_interaction.get("timestamp", datetime.now())
+            
+            time_since_last = (datetime.now() - latest_interaction.get("timestamp", datetime.now())).total_seconds()
+            
+            # Reset elapsed tracking if there's been a long break (> 1 hour)
+            if time_since_last > 3600:
+                time_elapsed = 0.0
+                session_fatigue = 0.0
+            else:
+                time_elapsed = (datetime.now() - start_time_db).total_seconds()
+                session_fatigue = min(time_elapsed / MAX_SESSION_S, 1.0)
+        else:
+            time_elapsed = 0.0
+            session_fatigue = 0.0
+            
+    reading_time = MAX_SESSION_S
+    is_done = False # Default for live snapshot
+    
+    # Only print occasionally to reduce noise
+    if time_elapsed > 0 and int(time_elapsed) % 15 == 0:
         print(f"[DQN State] session_fatigue={session_fatigue:.4f} elapsed={time_elapsed:.1f}s max={MAX_SESSION_S}s")
-        
-        # Readiness Guard: Only trigger if the lesson has content (estimated_reading_time set)
-        # Recency Guard: Only trigger if the interaction started recently (e.g., last 10 mins)
-        is_recent = time_elapsed < 600 # 10 minutes
-        is_ready = reading_time > 0
-        
-        print(f"[Snapshot Debug] Student: {user_id}, Elapsed: {time_elapsed:.1f}s, Benchmark: {MAX_SESSION_S}s, Avg: {hist_avg:.2f}, Recent: {is_recent}")
-        
-        if is_recent and is_ready and time_elapsed > reading_time and not is_done and hist_avg < 0.98:
-            intervention_needed = True
-            # Log only if significantly past benchmark to reduce noise
-            if int(time_elapsed) % 30 == 0:
-                print(f"[Snapshot Debug] 🎯 INTERVENTION ELIGIBLE for {user_id} (Elapsed: {time_elapsed:.0f}s)")
+    
+    # Readiness Guard
+    is_recent = time_elapsed < 600 # 10 minutes
+    is_ready = reading_time > 0
+    
+    if is_recent and is_ready and time_elapsed > reading_time and hist_avg < 0.98:
+        intervention_needed = True
+        # Log only if significantly past benchmark to reduce noise
+        if int(time_elapsed) % 30 == 0:
+            print(f"[Snapshot Debug] 🎯 INTERVENTION ELIGIBLE for {user_id} (Elapsed: {time_elapsed:.0f}s)")
 
     # 6. Map Action ID to Policy Name
     action_id = latest_rl.get("action_id", 0) if latest_rl else 0

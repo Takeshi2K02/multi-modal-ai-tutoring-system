@@ -41,6 +41,7 @@ async def retrieve_context(state: AgentState) -> AgentState:
     if REDIS_AVAILABLE and topic_id:
         # Fix 4: Normalize lookup key with strip() to match pre-fetch
         cache_key = f"rag_cache:{module_id.strip()}:{topic_id.strip()}"
+        print(f"[Pipeline] 🔍 Redis Lookup | Key: {cache_key}")
         try:
             is_found = redis_client.exists(cache_key)
             # Suppress heartbeat lookup logs, only log hits or misses
@@ -56,7 +57,7 @@ async def retrieve_context(state: AgentState) -> AgentState:
                 # Fix: Fetch student snapshot even on cache hit (Not optional for downstream logic)
                 memory = MemoryManager()
                 profile = memory.get_student_profile(student_id)
-                snapshot = get_student_snapshot(student_id)
+                snapshot = get_student_snapshot(student_id, session_start_time=state.get("start_time"))
                 
                 # Format RAG data for early return
                 rag_context = "\n---\n".join([r["text"] for r in rag_results])
@@ -131,7 +132,7 @@ async def retrieve_context(state: AgentState) -> AgentState:
     # --- CACHE MISS PATH (Normal execution) ---
     memory = MemoryManager()
     profile = memory.get_student_profile(student_id)
-    snapshot = get_student_snapshot(student_id)
+    snapshot = get_student_snapshot(student_id, session_start_time=state.get("start_time"))
     
     collection_id = existing_context.get("collection_id")
     rag_results = []
@@ -141,10 +142,10 @@ async def retrieve_context(state: AgentState) -> AgentState:
     vectordb = get_vector_db()
     rag_filter = {"collection_id": collection_id} if collection_id else None
     
-    rag_results = vectordb.search(state["user_query"], top_k=5, filter=rag_filter)
+    rag_results = vectordb.search(state["user_query"], top_k=20, filter=rag_filter)
     
     if not rag_results and rag_filter:
-        rag_results = vectordb.search(state["user_query"], top_k=5, filter=None)
+        rag_results = vectordb.search(state["user_query"], top_k=20, filter=None)
     
     print(f"[Pipeline] 📚 RAG Cache MISS | Retrieved {len(rag_results)} chunks from Pinecone")
 

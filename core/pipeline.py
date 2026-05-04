@@ -124,12 +124,12 @@ async def run_simulation(req: ScenarioRequest, user_id: str, is_prefetch: bool =
                 print(f"[Prefetch] 📤 Emitting payload keys: {list(payload.keys())}")
                 
                 # Emit immediately
-                await sio.emit("synthesis_complete", payload)
+                await sio.emit("synthesis_complete", payload, room=student_id)
                 
                 # Delete key after serving
                 r.delete(prefetch_key)
                 
-                return GraphResponse(nodes=[], edges=[], meta={"prefetched": True})
+                return GraphResponse(nodes=[], edges=[], meta={"prefetched": True, "prefetched_payload": payload})
             else:
                 print(f"[Prefetch] ⏳ Prefetch not ready for session={session_id} — running pipeline live")
         except Exception as e:
@@ -286,6 +286,8 @@ async def run_simulation(req: ScenarioRequest, user_id: str, is_prefetch: bool =
         # Project ID: 25-26J-130: 90s Timeout Guard for Multimodal Synthesis
         # Track active synthesis to block interventions
         active_student_synthesis.add(student_id)
+        import core.state
+        core.state.is_tot_running = True
         final_state = await asyncio.wait_for(
             agent.ainvoke(initial_state, config={"recursion_limit": 20}),
             timeout=180.0
@@ -343,3 +345,5 @@ async def run_simulation(req: ScenarioRequest, user_id: str, is_prefetch: bool =
         }
     finally:
         active_student_synthesis.discard(student_id)
+        import core.state
+        core.state.is_tot_running = False

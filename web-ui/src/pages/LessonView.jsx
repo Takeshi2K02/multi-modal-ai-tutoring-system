@@ -1,892 +1,75 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import ReactMarkdown from 'react-markdown';
-import clsx from 'clsx';
-import {
-    BrainCircuit,
-    Sparkles,
-    CheckCircle2,
-    XCircle,
-    ArrowLeft,
-    Gamepad2,
-    FileText,
-    Database,
-    ChevronRight,
-    AlertCircle,
-    ThumbsUp,
-    ThumbsDown,
-    Activity,
-    Target
-} from 'lucide-react';
-import DynamicVisualContainer from '../components/DynamicVisualContainer';
-import Mermaid from '../components/Mermaid';
-import {
-    savePerformance,
-    updateSessionProgress,
-    evaluateChallenge,
-    saveLessonContent,
-    getLessonContent,
-    syncStudentProgress,
-    handleUserFeedback,
-    acceptShadowIntervention,
-    runSimulation,
-    manualPrefetch,
-    fetcher,
-    API_BASE_URL
-} from '../services/api';
-import { useAuth } from "../AuthContext";
-import useSWR from 'swr';
-import toast from 'react-hot-toast';
-
-const ChallengeComponent = ({ topic, context, onComplete, sessionId }) => {
-    const { userId } = useAuth();
-    const [response, setResponse] = useState('');
-    const [isEvaluating, setIsEvaluating] = useState(false);
-    const [feedback, setFeedback] = useState(null);
-    const [score, setScore] = useState(null);
-
-    const handleSubmit = async () => {
-        if (!response.trim() || isEvaluating) return;
-        setIsEvaluating(true);
-        try {
-            const result = await evaluateChallenge({
-                student_id: userId,
-                session_id: sessionId,
-                topic_id: topic,
-                response: response,
-                context: context
-            });
-            setFeedback(result.feedback);
-            setScore(result.score);
-            if (result.score >= 0.7) {
-                onComplete(response, result.score);
-            }
-        } catch (err) {
-            console.error("Challenge Error:", err);
-        } finally {
-            setIsEvaluating(false);
-        }
-    };
-
-    return (
-        <div className="mt-12 p-8 bg-[#121212] rounded-[40px] border border-white/5 shadow-2xl relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-8 opacity-5 text-primary">
-                <BrainCircuit size={100} />
-            </div>
-
-            <div className="relative z-10 space-y-6">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
-                        <Gamepad2 size={20} className="text-primary" />
-                    </div>
-                    <div>
-                        <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-primary">Active Design Challenge</h4>
-                        <p className="text-sm text-zinc-400 font-light">Apply your knowledge to solve this problem</p>
-                    </div>
-                </div>
-
-                <div className="space-y-4">
-                    <textarea
-                        value={response}
-                        onChange={(e) => setResponse(e.target.value)}
-                        placeholder="Define 3-5 core attributes for this design..."
-                        disabled={score >= 0.7}
-                        className="w-full min-h-[160px] bg-black/40 border border-white/10 rounded-3xl p-6 text-zinc-300 placeholder:text-zinc-700 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 outline-none transition-all resize-none font-mono text-sm leading-relaxed"
-                    />
-
-                    {!feedback && (
-                        <button
-                            onClick={handleSubmit}
-                            disabled={!response.trim() || isEvaluating}
-                            className="w-full py-5 bg-primary text-white font-black rounded-full shadow-xl shadow-primary/10 hover:scale-[1.02] active:scale-95 disabled:opacity-30 disabled:grayscale transition-all flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-xs"
-                        >
-                            {isEvaluating ? 'AI Processing...' : 'Submit for Evaluation'}
-                        </button>
-                    )}
-                </div>
-
-                <AnimatePresence>
-                    {feedback && (
-                        <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className={clsx(
-                                "p-6 rounded-3xl border backdrop-blur-md",
-                                score >= 0.7 ? "bg-secondary/5 border-secondary/20" : "bg-danger/5 border-danger/20"
-                            )}
-                        >
-                            <div className="flex items-start gap-4">
-                                <div className={clsx(
-                                    "w-8 h-8 rounded-xl flex items-center justify-center shrink-0",
-                                    score >= 0.7 ? "bg-secondary/20 text-secondary" : "bg-danger/20 text-danger"
-                                )}>
-                                    {score >= 0.7 ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                                </div>
-                                <div className="space-y-2">
-                                    <div className="flex items-center gap-3">
-                                        <span className="text-xs font-black uppercase tracking-widest text-zinc-400">AI Feedback</span>
-                                        <span className={clsx(
-                                            "text-[10px] font-mono font-bold px-2 py-0.5 rounded-full",
-                                            score >= 0.7 ? "bg-secondary/10 text-secondary" : "bg-danger/10 text-danger"
-                                        )}>
-                                            Score: {(score * 100).toFixed(0)}%
-                                        </span>
-                                    </div>
-                                    <p className="text-sm font-light leading-relaxed text-zinc-300">{feedback}</p>
-                                    {score < 0.7 && (
-                                        <button
-                                            onClick={() => { setFeedback(null); setScore(null); }}
-                                            className="text-[10px] font-black uppercase tracking-widest text-primary hover:opacity-80 transition-opacity"
-                                        >
-                                            Try Again →
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-            </div>
-        </div>
-    );
-};
-
-// --- Guardrails & Error Boundary ---
-class ErrorBoundary extends React.Component {
-    constructor(props) {
-        super(props);
-        this.state = { hasError: false };
-    }
-    static getDerivedStateFromError(error) { return { hasError: true }; }
-    componentDidCatch(error, errorInfo) { console.error(">>> Component Crash Handled:", error, errorInfo); }
-    render() {
-        if (this.state.hasError) {
-            return (
-                <div className="p-8 rounded-3xl border border-danger/20 bg-danger/5 text-center">
-                    <p className="text-sm text-danger font-medium">Interactive component failed to load.</p>
-                </div>
-            );
-        }
-        return this.props.children;
-    }
-}
-
-const QuizComponent = ({ quiz, onOptionSelect, isSubmitted, selectedOption, correctIndex }) => {
-    if (!quiz || !quiz.questions || !Array.isArray(quiz.questions)) {
-        return (
-            <div className="mt-8 p-6 bg-white/5 dark:bg-white/[0.02] rounded-3xl border border-white/5 flex items-center gap-3">
-                <AlertCircle className="text-zinc-500" size={16} />
-                <span className="text-xs text-zinc-500 italic">Quiz structure initialization failed. Skipping...</span>
-            </div>
-        );
-    }
-
-    return (
-        <div className="mt-12 p-10 bg-[#121212] rounded-[48px] border border-white/5 shadow-2xl relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-8 opacity-5 text-primary">
-                <Sparkles size={120} />
-            </div>
-
-            <div className="relative z-10">
-                <div className="flex items-center gap-4 mb-8">
-                    <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center border border-primary/20">
-                        <BrainCircuit size={20} className="text-primary" />
-                    </div>
-                    <div>
-                        <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-primary">Knowledge Synthesis Check</h4>
-                        <p className="text-xs text-zinc-500 font-light">Validate your understanding of the core concepts</p>
-                    </div>
-                </div>
-
-                {quiz.questions.map((q, qIdx) => (
-                    <div key={qIdx} className="space-y-8">
-                        <p className="text-2xl font-light text-white tracking-tight leading-relaxed">
-                            {q.question}
-                        </p>
-
-                        <div className="grid grid-cols-1 gap-4">
-                            {q.options?.map((option, idx) => {
-                                const isSelected = selectedOption === idx;
-                                const isCorrect = idx === q.correct_index;
-
-                                let btnClass = "bg-white/[0.02] border-white/5 text-zinc-400 hover:border-primary/30 hover:bg-white/[0.04]";
-                                if (isSelected) btnClass = "bg-primary/10 border-primary/50 text-white shadow-lg shadow-primary/10";
-                                if (isSubmitted) {
-                                    if (isCorrect) btnClass = "bg-secondary/10 border-secondary/50 text-secondary shadow-lg shadow-secondary/10";
-                                    else if (isSelected) btnClass = "bg-danger/10 border-danger/50 text-danger shadow-lg shadow-danger/10";
-                                }
-
-                                return (
-                                    <button
-                                        key={idx}
-                                        disabled={isSubmitted}
-                                        onClick={() => onOptionSelect(idx)}
-                                        className={`p-6 rounded-3xl border transition-all duration-300 text-left flex items-center justify-between text-base ${btnClass}`}
-                                    >
-                                        <span className="font-light">{option}</span>
-                                        {isSubmitted && isCorrect && <CheckCircle2 size={20} className="text-secondary" />}
-                                        {isSubmitted && isSelected && !isCorrect && <XCircle size={20} className="text-danger" />}
-                                    </button>
-                                );
-                            })}
-                        </div>
-
-                        {isSubmitted && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="p-6 rounded-3xl bg-white/[0.02] border border-white/5"
-                            >
-                                <div className="flex gap-4">
-                                    <div className="w-8 h-8 rounded-xl bg-white/5 flex items-center justify-center shrink-0">
-                                        <FileText size={16} className="text-zinc-400" />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <p className="text-xs font-black uppercase tracking-widest text-zinc-500">Pedagogical Insight</p>
-                                        <p className="text-sm font-light leading-relaxed text-zinc-400">{q.explanation}</p>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        )}
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
-};
-
-const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedContent }) => {
-    const { userId } = useAuth();
-    const [loading, setLoading] = useState(!preGeneratedContent);
-    const [content, setContent] = useState(null);
-    const [isThinking, setIsThinking] = useState(!preGeneratedContent);
-    const [selectedOption, setSelectedOption] = useState(null);
-    const [isSubmitted, setIsSubmitted] = useState(false);
-    const [isChallengeComplete, setIsChallengeComplete] = useState(false);
-    const [shadowReady, setShadowReady] = useState(null);
-    const [isCompleting, setIsCompleting] = useState(false);
-    const [response, setResponse] = useState('');
-    const [error, setError] = useState(null);
-    const [isVisualReady, setIsVisualReady] = useState(false);
-    const [interactionId, setInteractionId] = useState(null);
-    const [strategyLabel, setStrategyLabel] = useState(null);
-    const [feedbackSent, setFeedbackSent] = useState(false);
-    const [score, setScore] = useState(0);
-    const [signalData, setSignalData] = useState({ nodes: [], edges: [] });
-    const [currentModality, setCurrentModality] = useState('Synthesis');
-    const [ragSources, setRagSources] = useState([]);
-    const [profileToast, setProfileToast] = useState(null);
-    const [progressPhases, setProgressPhases] = useState([]);
-    const [elapsedSeconds, setElapsedSeconds] = useState(0);
-    const [isDeliveryComplete, setIsDeliveryComplete] = useState(false);
-    const [isFromCache, setIsFromCache] = useState(false); // Issue 3
-
-    // Timer for loading feedback (Project ID: 25-26J-130)
-    useEffect(() => {
-        let interval;
-        if ((isThinking || loading) && !isDeliveryComplete) {
-            interval = setInterval(() => {
-                setElapsedSeconds(prev => prev + 1);
-            }, 1000);
-        }
-        return () => clearInterval(interval);
-    }, [isThinking, loading, isDeliveryComplete]);
-
-    useEffect(() => {
-        if (signalData?.nodes?.length > 0 && !isVisualReady) {
-            const timer = setTimeout(() => setIsVisualReady(true), 800);
-            return () => clearTimeout(timer);
-        }
-    }, [signalData?.nodes, isVisualReady]);
-
-    useEffect(() => {
-        const initializeLesson = async (signal) => {
-            if (!topic) return;
-            setLoading(true);
-            setIsThinking(true);
-            setIsVisualReady(false);
-            setSelectedOption(null);
-            setIsSubmitted(false);
-            setIsChallengeComplete(false);
-            setShadowReady(null);
-            setIsDeliveryComplete(false);
-            setElapsedSeconds(0);
-            try {
-                const topicId = topic.id || topic.title;
-
-                // Project ID: 25-26J-130: Phase 4 Direct Handoff (Optimized)
-                if (preGeneratedContent) {
-                    console.log(">>> [LessonView] Initializing with Pre-Generated Content:", preGeneratedContent);
-                    
-                    // Correcting payload parsing: GraphResponse.meta.content.full_text (Issue Fix)
-                    const finalContent = preGeneratedContent.full_text || 
-                                       preGeneratedContent.final_content || 
-                                       preGeneratedContent.meta?.content?.full_text || 
-                                       preGeneratedContent.meta?.body_text ||
-                                       preGeneratedContent.meta?.final_response;
-                    
-                    const modality = preGeneratedContent.current_modality || 
-                                   (finalContent?.includes('[MERMAID_START]') ? 'VISUAL' : 'TEXTUAL');
-
-                    const directive = {
-                        type: modality === 'VISUAL' ? 'visual_explanation' : 'explanation',
-                        content: finalContent
-                    };
-                    
-                    if (finalContent) {
-                        const resolvedInteractionId = preGeneratedContent.interaction_id || 
-                                                     preGeneratedContent.meta?.interaction_id || 
-                                                     preGeneratedContent.synthesis_id;
-
-                        console.log("[LessonView] interactionId resolved as:", resolvedInteractionId || "MISSING");
-
-                        setContent(directive);
-                        setInteractionId(resolvedInteractionId);
-                        setStrategyLabel(preGeneratedContent.strategy || preGeneratedContent.meta?.strategy);
-                        setRagSources(preGeneratedContent.rag_sources || preGeneratedContent.meta?.context_data?.rag_sources || []);
-                        setCurrentModality(modality);
-
-                        setIsThinking(false);
-                        setLoading(false);
-                        onReady?.();
-                        return;
-                    }
-                    console.warn(">>> [LessonView] Pre-generated content was empty or invalid. Falling back to fetch/gen.");
-                }
-
-                const existing = await getLessonContent(userId, topicId);
-
-                if (signal.aborted) return;
-
-                if (existing && (existing.content || existing.directive)) {
-                    const savedDirective = existing.directive || existing.content;
-                    setContent(savedDirective);
-                    setIsFromCache(true); // Issue 3
-                    setIsThinking(false);
-                    if (existing.user_response) setResponse(existing.user_response);
-                    if (existing.ai_evaluation_score !== undefined) {
-                        setScore(existing.ai_evaluation_score);
-                        if (existing.ai_evaluation_score >= 0.7) setIsChallengeComplete(true);
-                    }
-                    setLoading(false);
-                    onReady?.();
-                    return;
-                }
-
-                const scenario = `Teach me about ${topic.title}`;
-
-                // Debug: confirm session_id before firing
-                console.log('[LessonView] Firing runSimulation with session_id:', sessionId);
-                if (!sessionId) {
-                    setError('No active session found. Please go back and start your learning path again.');
-                    setIsThinking(false);
-                    return;
-                }
-
-                const result = await runSimulation(scenario, topic, null, null, sessionId);
-
-                // Handle structured error (Issue 3)
-                if (result.error) {
-                    setError(result.message || result.error);
-                    setIsThinking(false);
-                    return;
-                }
-
-                if (result.nodes) setSignalData({ nodes: result.nodes, edges: result.edges || [] });
-
-                if (signal.aborted) return;
-
-                if (result.meta?.strategy === 'ERROR' || result.meta?.strategy === 'TIMED_OUT') {
-                    setError(result.meta?.body_text || "Re-calibrating. Please wait...");
-                    setIsThinking(false);
-                    return;
-                }
-
-                const bestNodeId = result.meta?.best_path_ids?.[result.meta.best_path_ids.length - 1];
-                const bestNode = result.nodes?.find(n => n.id === bestNodeId);
-                const finalContent = result.meta?.content?.full_text || 
-                                     result.meta?.body_text || 
-                                     result.meta?.final_response || 
-                                     result.meta?.final_content || 
-                                     result.full_text;
-
-                const directive = bestNode?.data?.directive || {
-                    type: "explanation",
-                    content: finalContent || (result.meta?.prefetched ? null : "Complete.")
-                };
-
-                if (directive.content) {
-                    setContent(directive);
-                }
-                setInteractionId(result.meta?.interaction_id);
-                setIsFromCache(!!result.meta?.from_cache); // Issue 3
-                setStrategyLabel(result.meta?.selected_strategy_label || result.meta?.strategy_label);
-                setRagSources(result.meta?.rag_sources || []);
-                setCurrentModality(result.meta?.current_modality || (directive?.content?.includes('graph TD') ? 'VISUAL' : 'TEXTUAL'));
-
-                setTimeout(() => {
-                    if (signal.aborted) return;
-                    setIsThinking(false);
-                    onReady?.();
-                }, 1500);
-
-            } catch (err) {
-                if (err.name === 'AbortError') return;
-                setError(`Failed to initialize cognitive path: ${err.message}`);
-            } finally {
-                if (!signal.aborted) setLoading(false);
-            }
-        };
-
-        const controller = new AbortController();
-        initializeLesson(controller.signal);
-
-        if (sio) {
-            const handleConnect = () => {
-                if (userId) {
-                    sio.emit("join_room", { student_id: userId });
-                }
-            };
-
-            sio.on("connect", handleConnect);
-
-            if (sio.connected && userId) {
-                sio.emit("join_room", { student_id: userId });
-            }
-
-            sio.on('tot_final', (data) => {
-                console.log(">>> [ToT] Final Broadcast Recieved:", data);
-                setContent({
-                    content: data.full_text || data.final_content || "Content updated.",
-                    type: data.current_modality || "explanation"
-                });
-                if (data.interaction_id) setInteractionId(data.interaction_id);
-                if (data.strategy) setStrategyLabel(data.strategy);
-                setShadowReady(null);
-            });
-
-            sio.on('shadow_ready', (data) => {
-                console.log(">>> [Shadow ToT] Alternative Ready:", data);
-                setShadowReady(data);
-                if (data.interaction_id) setInteractionId(data.interaction_id);
-            });
-
-            sio.on('synthesis_complete', (data) => {
-                const finalContent = data.full_text || data.final_content;
-                if (finalContent) {
-                    setContent({
-                        content: finalContent,
-                        type: data.current_modality || "explanation"
-                    });
-                }
-                if (data.interaction_id) setInteractionId(data.interaction_id);
-                setIsThinking(false);
-            });
-
-            sio.on('profile_updated', (data) => {
-                console.log(">>> [Profile] Adaptation Confirmed:", data);
-                setProfileToast(data);
-                setTimeout(() => setProfileToast(null), 5000);
-            });
-
-            sio.on('progress', (data) => {
-                console.log(">>> [Synthesis Progress]:", data);
-                if (data.phase === 'delivery_complete') {
-                    setIsDeliveryComplete(true);
-                    if (data.elapsed_ms) {
-                        setElapsedSeconds(Math.floor(data.elapsed_ms / 1000));
-                    }
-                }
-                setProgressPhases(prev => {
-                    if (prev.find(p => p.phase === data.phase)) return prev;
-                    return [...prev, data];
-                });
-            });
-
-            return () => {
-                controller.abort();
-                sio.off("connect", handleConnect);
-                sio.off('tot_final');
-                sio.off('shadow_ready');
-                sio.off('synthesis_complete');
-                sio.off('profile_updated');
-            };
-        }
-
-        return () => {
-            controller.abort();
-        };
-    }, [topic.id || topic.title, sio, userId]);
-
-    const handleAcceptShadow = async () => {
-        if (!shadowReady || !interactionId) return;
-        try {
-            await acceptShadowIntervention({
-                student_id: userId,
-                interaction_id: interactionId,
-                modality_type: shadowReady.current_modality,
-                action_type: shadowReady.alternative_label,
-                topic_id: topic.id || topic.title
-            });
-            setContent({ content: shadowReady.full_text, type: shadowReady.current_modality || "explanation" });
-            setShadowReady(null);
-        } catch (err) {
-            console.error("Shadow Accept Error:", err);
-        }
-    };
-
-    const handleForceRegenerate = async () => {
-        setIsThinking(true);
-        setContent(null);
-        setError(null);
-        setShadowReady(null);
-        try {
-            const result = await runSimulation(`Teach me about ${topic.title}`, topic);
-            const directive = result.nodes?.find(n => n.id === result.meta?.best_path_ids?.slice(-1)[0])?.data?.directive;
-            setContent(directive);
-            setIsThinking(false);
-        } catch (e) {
-            setError("Regeneration failed.");
-        }
-    };
-
-    const hasDesignChallenge = useMemo(() => {
-        const text = typeof content?.content === 'string' ? content.content : '';
-        return text.includes('Design Challenge') || text.includes('### Challenge');
-    }, [content]);
-
-    const sanitizedContent = useMemo(() => {
-        if (typeof content?.content !== 'string') return '';
-        let text = content.content;
-        text = text.replace(/\[MERMAID_START\][\s\S]*?\[MERMAID_END\]/mg, '');
-        text = text.replace(/\[IMAGE_FOR_ALEX\]/g, '\n\n> [!TIP]\n> **Visual Context Generated**: An specialized architectural snapshot has been generated for your learning profile.\n\n');
-        return text.trim();
-    }, [content]);
-
-    const mermaidData = useMemo(() => {
-        if (!content?.content || !content.content.includes('[MERMAID_START]')) return null;
-        const match = content.content.match(/\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]/);
-        if (match && match[1]) {
-            return match[1].split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
-        }
-        return null;
-    }, [content]);
-
-    const isContentViewable = useMemo(() => {
-        return !!(sanitizedContent || mermaidData || content?.type === 'quiz' || hasDesignChallenge || signalData?.nodes?.length > 0);
-    }, [sanitizedContent, mermaidData, content, hasDesignChallenge, signalData?.nodes]);
-
-    const isReadyToComplete = useMemo(() => {
-        if (!isContentViewable) return false;
-        if (mermaidData && !isVisualReady) return false;
-        if (content?.type === 'quiz') return isSubmitted;
-        if (hasDesignChallenge) return isChallengeComplete;
-        
-        // Project ID: 25-26J-130: Require feedback for non-quiz content to enable RL signals
-        return !!feedbackSent;
-    }, [content, isSubmitted, hasDesignChallenge, isChallengeComplete, isContentViewable, mermaidData, isVisualReady, feedbackSent]);
-
-    const { data: sessionData } = useSWR(
-        sessionId ? `${API_BASE_URL}/api/session/${sessionId}` : null,
-        fetcher
-    );
-
-    const handleComplete = async () => {
-        if (!sessionId || !topic || isCompleting) return;
-        setIsCompleting(true);
-        try {
-            console.log(`[Completion] 🏁 Marking topic "${topic.title}" as complete...`);
-            await updateSessionProgress(sessionId, topic.title);
-            const finalPayload = {
-                student_id: userId,
-                topic_id: topic.title,
-                content: content,
-                user_response: response,
-                ai_evaluation_score: score,
-                interaction_id: interactionId
-            };
-            const result = await saveLessonContent(finalPayload);
-            console.log("[Completion] ✅ Synthesis saved to database:", result);
-            
-            await syncStudentProgress(finalPayload);
-            if (content?.type === 'quiz' && isSubmitted) {
-                await savePerformance({
-                    student_id: userId,
-                    session_id: sessionId,
-                    topic_id: topic.title,
-                    score: selectedOption === content.quiz?.correct_index ? 100 : 0,
-                    total_questions: 1,
-                    correct_answers: selectedOption === content.quiz?.correct_index ? 1 : 0
-                });
-            }
-
-            // Phase 2: Background Prefetch for Next Topic
-            if (sessionData?.plan?.curriculum?.structure) {
-                const structure = sessionData.plan.curriculum.structure;
-                const completedTopics = sessionData.session?.progress?.completed_topics || [];
-                
-                // Add current topic to local list for lookup
-                const currentCompleted = [...completedTopics, topic.title];
-                
-                let nextTopic = null;
-                let foundNext = false;
-                for (const lecture of structure) {
-                    for (const t of (lecture.children || [])) {
-                        if (!currentCompleted.includes(t.title)) {
-                            nextTopic = t;
-                            foundNext = true;
-                            break;
-                        }
-                    }
-                    if (foundNext) break;
-                }
-
-                if (nextTopic) {
-                    console.log(`[Prefetch] 🚀 Triggering manual prefetch for: ${nextTopic.title}`);
-                    const colId = sessionData.plan.system_metadata?.collection_id || sessionData.plan.collection_id;
-                    manualPrefetch({
-                        session_id: sessionId,
-                        topic_title: nextTopic.title,
-                        student_id: userId,
-                        collection_id: colId
-                    }).catch(err => console.error("[Prefetch] Manual trigger failed:", err));
-                }
-            }
-
-            onBack();
-        } catch (err) {
-            console.error("Completion Error:", err);
-            toast.error("Failed to synchronize completion. Please try again.");
-        } finally {
-            setIsCompleting(false);
-        }
-    };
-
-    const handleFeedback = async (sentiment) => {
-        if (feedbackSent) return;
-        
-        // Immediate UI update to unlock completion button
-        setFeedbackSent(sentiment ? 'up' : 'down');
-        
-        if (!interactionId) {
-            console.warn("[LessonView] Feedback triggered but interactionId is missing. Using fallback identifier for telemetry.");
-        }
-        
-        const feedbackToast = toast.loading("Sending feedback...");
-        
-        try {
-            const modality = (content?.type === 'visual_explanation' || (content?.content && content.content.includes('graph TD'))) ? 'visual' : 'textual';
-            
-            // Use fallback if interactionId is missing to prevent API failure or silent blocks
-            const targetInteractionId = interactionId || topic?.title || sessionId || "fallback_id";
-            
-            console.log(`[Feedback] 📡 Sending ${sentiment ? 'positive' : 'negative'} signal for: ${targetInteractionId}`);
-            
-            const response = await handleUserFeedback({
-                student_id: userId,
-                interaction_id: targetInteractionId,
-                action_type: strategyLabel || "SIMPLIFY_EXPLANATION",
-                sentiment: sentiment,
-                modality_type: modality,
-                topic_id: topic?.title
-            });
-            
-            console.log("[Feedback] ✅ Signal received by RL Engine:", response);
-            toast.success("Feedback recorded! Adapting profile...", { id: feedbackToast });
-        } catch (err) {
-            console.error("Feedback error:", err);
-            toast.error("Couldn't save feedback. But you can still continue.", { id: feedbackToast });
-            // Don't reset state so user isn't stuck, but they know it failed
-        }
-    };
-
-    const thumbsUpClass = clsx(
-        "p-4 rounded-full border transition-all duration-300", 
-        feedbackSent === 'up' 
-            ? "bg-secondary border-secondary text-white shadow-xl shadow-secondary/40 scale-110" 
-            : feedbackSent 
-                ? "opacity-20 grayscale cursor-not-allowed" 
-                : "bg-white/5 border-white/10 text-zinc-400 hover:border-secondary/50 hover:scale-110 active:scale-95"
-    );
-
-    const thumbsDownClass = clsx(
-        "p-4 rounded-full border transition-all duration-300", 
-        feedbackSent === 'down' 
-            ? "bg-danger border-danger text-white shadow-xl shadow-danger/40 scale-110" 
-            : feedbackSent 
-                ? "opacity-20 grayscale cursor-not-allowed" 
-                : "bg-white/5 border-white/10 text-zinc-400 hover:border-danger/50 hover:scale-110 active:scale-95"
-    );
-
-    const completeButtonClass = clsx(
-        "w-full py-6 rounded-full font-black text-xs uppercase tracking-[0.3em] transition-all flex items-center justify-center gap-4 shadow-2xl",
-        isReadyToComplete 
-            ? "bg-secondary text-white shadow-secondary/30 hover:scale-[1.02] active:scale-95" 
-            : "bg-white/5 text-zinc-600 cursor-not-allowed opacity-50 border border-white/5"
-    );
-
-    if (error) return (
-        <div className="h-full flex flex-col items-center justify-center p-10 text-center gap-6">
+import React from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { XCircle, Sparkles, BrainCircuit } from 'lucide-react';
+import { useLessonData } from '../components/lesson/useLessonData';
+import LessonHeader from '../components/lesson/LessonHeader';
+import LessonContent from '../components/lesson/LessonContent';
+import LessonFeedback from '../components/lesson/LessonFeedback';
+import LessonLoading from '../components/lesson/LessonLoading';
+import ChallengeComponent from '../components/lesson/ChallengeComponent';
+import QuizComponent from '../components/lesson/QuizComponent';
+import ErrorBoundary from '../components/lesson/ErrorBoundary';
+
+const LessonView = ({ sessionId, topic, onBack, onReady, sio, onPrefetchStarted }) => {
+    const data = useLessonData(sessionId, topic, onBack, onReady, sio, onPrefetchStarted);
+
+    if (data.error) return (
+        <div className="h-full flex flex-col items-center justify-center p-10 text-center gap-6 bg-edu-bg-light dark:bg-edu-bg-dark">
             <XCircle size={48} className="text-danger opacity-50" />
-            <p className="text-zinc-500 dark:text-slate-400">{error}</p>
+            <p className="text-zinc-500 dark:text-slate-400">{data.error}</p>
             <button onClick={onBack} className="text-primary font-bold uppercase tracking-widest text-xs">Return to Browser</button>
         </div>
     );
 
+    if (data.isThinking && !data.isContentViewable) {
+        return <LessonLoading topicTitle={topic?.title} />;
+    }
+
     return (
         <div className="h-full w-full bg-edu-bg-light dark:bg-edu-bg-dark transition-colors overflow-y-auto custom-scrollbar">
             <div className="max-w-4xl mx-auto p-6 lg:p-12 min-h-full flex flex-col">
-                <header className="flex items-center justify-between mb-12">
-                    <button onClick={onBack} className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-zinc-400 dark:text-slate-500 hover:text-primary transition-colors">
-                        <ArrowLeft size={14} /> Exit Module
-                    </button>
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-primary">Live Synthesis Active</span>
-                        </div>
-                    </div>
-                </header>
+                <LessonHeader onBack={onBack} strategyLabel={data.strategyLabel} currentModality={data.currentModality} />
 
                 <main className="flex-1 space-y-12 pb-24">
-                    {!isContentViewable ? (
+                    {!data.isContentViewable ? (
                         <div className="h-[40vh] flex flex-col items-center justify-center p-8 bg-white/40 dark:bg-white/[0.01] border border-edu-border-light dark:border-white/5 rounded-[48px] backdrop-blur-3xl shadow-sm transition-all overflow-hidden relative">
                              <div className="w-10 h-10 border-[3px] border-primary/10 border-t-primary rounded-full animate-spin" />
                              <p className="mt-4 text-[10px] font-black uppercase tracking-widest text-primary animate-pulse">Initializing Cognitive Path...</p>
                         </div>
                     ) : (
                         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-12">
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-4">
-                                    <h2 className="text-4xl lg:text-5xl font-light text-edu-text-light dark:text-white tracking-tight">{topic?.title}</h2>
-                                    {isFromCache && (
-                                        <span className="px-3 py-1 bg-secondary/20 border border-secondary/30 text-secondary text-[10px] font-black uppercase tracking-widest rounded-full">
-                                            Previously Completed
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 dark:text-slate-500 tracking-wide">
-                                    <span className="flex items-center gap-1.5"><Gamepad2 size={14} /> {strategyLabel?.replace(/_/g, ' ') || 'INTERACTIVE NODE'}</span>
-                                    <span className="w-1 h-1 rounded-full bg-zinc-200 dark:bg-white/10" />
-                                    <span className="flex items-center gap-1.5"><FileText size={14} /> {currentModality}</span>
-                                </div>
-                            </div>
+                            <LessonContent 
+                                topic={topic}
+                                isFromCache={data.isFromCache}
+                                strategyLabel={data.strategyLabel}
+                                currentModality={data.currentModality}
+                                sanitizedContent={data.sanitizedContent}
+                                mermaidData={data.mermaidData}
+                                hasDesignChallenge={data.hasDesignChallenge}
+                                content={data.content}
+                                sessionId={sessionId}
+                                setIsChallengeComplete={data.setIsChallengeComplete}
+                                setResponse={data.setResponse}
+                                setScore={data.setScore}
+                                selectedOption={data.selectedOption}
+                                setSelectedOption={data.setSelectedOption}
+                                isSubmitted={data.isSubmitted}
+                                setIsSubmitted={data.setIsSubmitted}
+                                ragSources={data.ragSources}
+                                ChallengeComponent={ChallengeComponent}
+                                QuizComponent={QuizComponent}
+                                ErrorBoundary={ErrorBoundary}
+                            />
 
-                            <article className="prose prose-lg dark:prose-invert prose-indigo max-w-none">
-                                <div className="text-xl font-light leading-relaxed text-zinc-600 dark:text-slate-300 transition-colors">
-                                    <ReactMarkdown components={{
-                                        code({ node, inline, className, children, ...props }) {
-                                            return <code className="bg-primary/20 text-white px-2 py-0.5 rounded text-sm font-mono border border-primary/30" {...props}>{children}</code>
-                                        },
-                                        p: ({ children }) => <p className="mb-6 leading-relaxed opacity-90">{children}</p>,
-                                        h3: ({ children }) => <h3 className="text-2xl font-light text-primary mt-12 mb-6 tracking-tight">{children}</h3>,
-                                        li: ({ children }) => <li className="mb-3 list-disc ml-6 opacity-80">{children}</li>,
-                                        strong: ({ children }) => <strong className="font-bold text-white border-b border-primary/30">{children}</strong>
-                                    }}>{sanitizedContent}</ReactMarkdown>
-                                </div>
-                            </article>
-
-                            {mermaidData && (
-                                <div className="my-12 p-8 bg-[#121212]/50 rounded-[40px] border border-white/5 shadow-2xl overflow-hidden group transition-all hover:border-primary/20">
-                                    <div className="flex items-center gap-3 mb-8">
-                                        <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center border border-primary/20">
-                                            <span className="text-[10px] font-black text-primary">VIS</span>
-                                        </div>
-                                        <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400">Architectural Schema</h4>
-                                    </div>
-                                    <Mermaid chart={mermaidData} />
-                                </div>
-                            )}
-
-                            {hasDesignChallenge && (
-                                <ErrorBoundary>
-                                    <ChallengeComponent
-                                        topic={topic?.title}
-                                        context={content?.content}
-                                        sessionId={sessionId}
-                                        onComplete={(userRes, evaluationScore) => {
-                                            setIsChallengeComplete(true);
-                                            setResponse(userRes);
-                                            setScore(evaluationScore);
-                                        }}
-                                    />
-                                </ErrorBoundary>
-                            )}
-
-                            {content?.type === 'quiz' && (
-                                <ErrorBoundary>
-                                    <QuizComponent
-                                        quiz={content.quiz}
-                                        selectedOption={selectedOption}
-                                        onOptionSelect={setSelectedOption}
-                                        isSubmitted={isSubmitted}
-                                        correctIndex={content.quiz?.correct_index}
-                                    />
-                                </ErrorBoundary>
-                            )}
-
-                            {content?.type === 'quiz' && !isSubmitted && selectedOption !== null && (
-                                <button onClick={() => setIsSubmitted(true)} className="w-full py-5 bg-primary text-white font-black rounded-full shadow-2xl shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all text-xs uppercase tracking-[0.3em]">
-                                    Verify Knowledge
-                                </button>
-                            )}
-
-                            <div className="pt-12 border-t border-edu-border-light dark:border-white/5 flex flex-col items-center gap-8">
-                                <div className="flex flex-col items-center gap-4">
-                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-zinc-500">How was this explanation?</p>
-                                    <div className="flex items-center gap-6">
-                                        <button 
-                                            onClick={() => { console.log("Feedback Up Clicked"); handleFeedback(true); }} 
-                                            disabled={feedbackSent} 
-                                            className={thumbsUpClass}
-                                        >
-                                            <ThumbsUp size={20} fill={feedbackSent === 'up' ? "currentColor" : "none"} />
-                                        </button>
-                                        <button 
-                                            onClick={() => { console.log("Feedback Down Clicked"); handleFeedback(false); }} 
-                                            disabled={feedbackSent} 
-                                            className={thumbsDownClass}
-                                        >
-                                            <ThumbsDown size={20} fill={feedbackSent === 'down' ? "currentColor" : "none"} />
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="w-full max-w-md flex flex-col items-center gap-4">
-                                    <button 
-                                        onClick={handleComplete} 
-                                        disabled={isCompleting || !isReadyToComplete}
-                                        className={completeButtonClass}
-                                    >
-                                        {isCompleting ? 'Synchronizing State...' : 'Complete Module'}
-                                        <CheckCircle2 size={18} />
-                                    </button>
-                                    
-                                    {!feedbackSent && isContentViewable && (
-                                        <p className="text-[10px] font-medium text-zinc-500 animate-pulse">
-                                            Please rate this explanation to continue
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-
-                                {ragSources?.length > 0 && (
-                                    <div className="mt-12 w-full pt-12 border-t border-edu-border-light dark:border-white/5">
-                                        <div className="flex flex-col gap-4">
-                                            <div className="flex items-center gap-2">
-                                                <Database size={14} className="text-secondary" />
-                                                <span className="text-[10px] font-black uppercase tracking-widest text-secondary">Verified Knowledge Sources</span>
-                                            </div>
-                                            <div className="flex flex-wrap gap-3">
-                                                {Array.from(new Set(ragSources)).map((src, idx) => (
-                                                    <div key={idx} className="px-4 py-2 bg-secondary/5 border border-secondary/10 rounded-full flex items-center gap-2 text-[10px] text-zinc-500 font-medium">
-                                                        <FileText size={12} className="opacity-50" /> {src}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
+                            <LessonFeedback 
+                                feedbackSent={data.feedbackSent}
+                                onFeedback={data.handleFeedback}
+                                isReadyToComplete={data.isReadyToComplete}
+                                isCompleting={data.isCompleting}
+                                handleComplete={data.handleComplete}
+                                isContentViewable={data.isContentViewable}
+                                isFromCache={data.isFromCache}
+                            />
                         </motion.div>
                     )}
                 </main>
@@ -894,25 +77,25 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, preGeneratedConten
                 {/* Suggestions & Profile Adaptation Toasts */}
                 <div className="fixed bottom-12 right-12 z-[100] flex flex-col gap-4 items-end">
                     <AnimatePresence>
-                        {shadowReady && !isThinking && (
+                        {data.shadowReady && !data.isThinking && (
                             <motion.div initial={{ opacity: 0, y: 20, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.9 }} className="p-6 bg-zinc-900 border border-secondary/30 backdrop-blur-3xl rounded-[32px] shadow-2xl flex items-center justify-between gap-6 max-w-md">
                                 <div className="flex items-center gap-4">
                                     <div className="w-12 h-12 rounded-2xl bg-secondary/10 flex items-center justify-center text-secondary border border-secondary/20"><Sparkles size={24} /></div>
                                     <div className="text-left">
                                         <p className="text-[10px] font-black uppercase tracking-widest text-secondary">Alternative Path Ready</p>
-                                        <p className="text-sm font-light text-zinc-300">Switch to <strong>{shadowReady.alternative_label}</strong> for better engagement?</p>
+                                        <p className="text-sm font-light text-zinc-300">Switch to <strong>{data.shadowReady.alternative_label}</strong> for better engagement?</p>
                                     </div>
                                 </div>
-                                <button onClick={handleAcceptShadow} className="px-6 py-3 bg-secondary text-white text-[10px] font-black uppercase tracking-widest rounded-full hover:scale-105 active:scale-95 transition-all">Swap</button>
+                                <button onClick={data.handleAcceptShadow} className="px-6 py-3 bg-secondary text-white text-[10px] font-black uppercase tracking-widest rounded-full hover:scale-105 active:scale-95 transition-all">Swap</button>
                             </motion.div>
                         )}
 
-                        {profileToast && (
+                        {data.profileToast && (
                             <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="p-6 bg-zinc-900/90 backdrop-blur-2xl rounded-3xl border border-white/10 shadow-3xl text-white flex items-center gap-4 min-w-[320px]">
                                 <div className="w-12 h-12 rounded-full bg-secondary/20 flex items-center justify-center border border-secondary/40"><BrainCircuit className="text-secondary" /></div>
                                 <div className="text-left">
                                     <p className="text-[10px] font-black uppercase tracking-widest text-secondary mb-1">Profile Adapted</p>
-                                    <p className="text-xs font-light text-zinc-400">Increased <strong>{profileToast.modality}</strong> weight by <strong>+{profileToast.delta}</strong></p>
+                                    <p className="text-xs font-light text-zinc-400">Increased <strong>{data.profileToast.modality}</strong> weight by <strong>+{data.profileToast.delta}</strong></p>
                                 </div>
                             </motion.div>
                         )}

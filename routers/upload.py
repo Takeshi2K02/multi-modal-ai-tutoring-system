@@ -16,6 +16,11 @@ from db.connection import get_db_connection, get_profiles_collection
 # Services
 from services.learning_plan_service import LearningPlanService
 from services.learning_session_service import LearningSessionService
+from services.decomposition_service import decompose_goal
+from services.ingestion_service import ingest_document
+from services.analysis_service import analyze_pdf_anatomy
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 router = APIRouter()
 

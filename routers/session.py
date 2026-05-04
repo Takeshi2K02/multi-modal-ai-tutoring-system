@@ -126,10 +126,8 @@ async def get_session(session_id: str):
             
             elif lock_exists and not result_exists:
                 if task_key not in active_prefetch_tasks:
-                    print(f"[Prefetch] 🔄 Stale lock detected (no task running) — deleting lock and re-triggering for session={session_id_str}")
                     r.delete(lock_key)
                 else:
-                    print(f"[Prefetch] ⏳ Background ToT in progress for session={session_id_str} — skipping")
                     raise StopIteration
 
             print(f"[Prefetch] 🚀 Background ToT started for session={session_id_str} topic={target_topic}")
@@ -220,10 +218,8 @@ async def manual_prefetch(req: Dict[str, str]):
         
     elif lock_exists and not result_exists:
         if task_key not in active_prefetch_tasks:
-            print(f"[Prefetch] 🔄 Stale lock detected (no task running) — deleting lock and re-triggering for session={session_id}")
             r.delete(lock_key)
         else:
-            print(f"[Prefetch] ⏳ Background ToT in progress for session={session_id} — skipping")
             return {"status": "In progress"}
 
     print(f"[Prefetch] 🚀 Background ToT started for session={session_id} topic={topic_id}")
@@ -328,13 +324,10 @@ async def prefetch_rag_to_redis(collection_id: str, topics: List[str], plan_id: 
             # Check if already cached
             if r.exists(cache_key): continue
             
-            print(f"[Cache] 🛰️ Pre-fetching RAG for topic: {topic}")
-            # Cap at 20 chunks as requested
             results = vectordb.search(f"Teach me about {topic}", top_k=20, filter={"collection_id": collection_id})
             if results:
                 r.setex(cache_key, 1800, json.dumps(results)) # 30 min TTL
-                print(f"[Cache] 📝 Writing key: {cache_key}")
-        print(f"[Cache] ✅ Pre-fetch complete for plan {plan_id}")
+        print(f"[Cache] ✅ Pre-fetch complete: {len(topics)} topics cached for plan {plan_id}")
     except Exception as e:
         print(f"[Cache] ⚠️ Background pre-fetch failed: {e}")
 
@@ -388,3 +381,39 @@ async def run_sim_endpoint(req: ScenarioRequest, user_id: str = Depends(get_curr
     Direct endpoint for running simulation, used by the frontend.
     """
     return await run_simulation(req, user_id=user_id)
+
+@router.get("/api/lesson/synthesis")
+async def get_lesson_synthesis(student_id: str, topic_id: str, session_id: Optional[str] = None):
+    """
+    Phase 21: Retrieve persistent synthesis from MongoDB.
+    """
+    try:
+        from db.connection import get_db_connection
+        db = get_db_connection()
+        
+        query = {
+            "student_id": student_id,
+            "topic_id": topic_id
+        }
+        if session_id:
+            query["session_id"] = session_id
+            
+        doc = db.lesson_synthesis.find_one(query)
+        
+        if doc:
+            # Check if expired
+            expires_at = doc.get("expires_at")
+            if expires_at and expires_at < datetime.utcnow():
+                return {"status": "not_ready", "reason": "expired"}
+                
+            # Convert ObjectId to string for JSON serialization
+            doc["_id"] = str(doc["_id"])
+            if "created_at" in doc: doc["created_at"] = doc["created_at"].isoformat()
+            if "expires_at" in doc: doc["expires_at"] = doc["expires_at"].isoformat()
+            
+            return doc
+        else:
+            return {"status": "not_ready"}
+    except Exception as e:
+        print(f"[API] Error fetching synthesis: {e}")
+        return {"status": "not_ready", "error": str(e)}

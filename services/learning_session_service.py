@@ -18,16 +18,20 @@ class LearningSessionService:
         self.generated_content = self.db.get_collection("generated_content") if self.db is not None else None
         self.student_progress = self.db.get_collection("student_progress") if self.db is not None else None
 
-    def get_generated_content(self, student_id: str, topic_id: str) -> Optional[Dict[str, Any]]:
+    def get_generated_content(self, student_id: str, topic_id: str, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Retrieves existing generated content for a topic and student.
         """
         if self.generated_content is not None:
             try:
-                content = self.generated_content.find_one({
+                query = {
                     "student_id": student_id,
                     "topic_id": topic_id
-                })
+                }
+                if session_id:
+                    query["session_id"] = session_id
+                    
+                content = self.generated_content.find_one(query)
                 if content:
                     content["_id"] = str(content["_id"])
                     return content
@@ -43,11 +47,15 @@ class LearningSessionService:
         """
         if self.generated_content is not None:
             try:
+                query = {
+                    "student_id": content_data["student_id"],
+                    "topic_id": content_data["topic_id"]
+                }
+                if "session_id" in content_data:
+                    query["session_id"] = content_data["session_id"]
+
                 self.generated_content.update_one(
-                    {
-                        "student_id": content_data["student_id"],
-                        "topic_id": content_data["topic_id"]
-                    },
+                    query,
                     {"$set": {**content_data, "updated_at": datetime.now()}},
                     upsert=True
                 )
@@ -63,11 +71,15 @@ class LearningSessionService:
         """
         if self.student_progress is not None:
             try:
+                query = {
+                    "student_id": progress_data["student_id"],
+                    "topic_id": progress_data["topic_id"]
+                }
+                if "session_id" in progress_data:
+                    query["session_id"] = progress_data["session_id"]
+
                 self.student_progress.update_one(
-                    {
-                        "student_id": progress_data["student_id"],
-                        "topic_id": progress_data["topic_id"]
-                    },
+                    query,
                     {"$set": {**progress_data, "updated_at": datetime.now()}},
                     upsert=True
                 )

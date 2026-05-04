@@ -178,10 +178,13 @@ export const evaluateChallenge = async (challengeData) => {
     }
 };
 
-export const getLessonContent = async (studentId, topicId) => {
+export const getLessonContent = async (studentId, topicId, sessionId = null) => {
     try {
+        const params = { student_id: studentId, topic_id: topicId };
+        if (sessionId) params.session_id = sessionId;
+        
         const response = await axios.get(`${API_BASE_URL}/api/lesson/content`, {
-            params: { student_id: studentId, topic_id: topicId }
+            params
         });
         return response.data.content;
     } catch (error) {
@@ -246,5 +249,18 @@ export const manualPrefetch = async (sessionData) => {
     } catch (error) {
         console.error("Manual Prefetch Error", error);
         throw error;
+    }
+};
+
+export const getSynthesis = async (studentId, topicId, sessionId = null) => {
+    try {
+        let url = `${API_BASE_URL}/api/lesson/synthesis?student_id=${studentId}&topic_id=${encodeURIComponent(topicId)}`;
+        if (sessionId) url += `&session_id=${sessionId}`;
+        
+        const response = await axios.get(url);
+        return response.data;
+    } catch (error) {
+        console.error("Get Synthesis Error", error);
+        return { status: "not_ready" };
     }
 };

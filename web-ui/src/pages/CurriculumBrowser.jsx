@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import useSWR from 'swr';
-import { fetcher, API_BASE_URL, startSessionTopic } from '../services/api';
 import {
     ChevronDown,
     ChevronRight,
@@ -13,12 +12,23 @@ import {
     Award,
     Clock,
     ArrowLeft,
-    Loader2
+    Loader2,
+    Sparkles,
+    Zap
 } from 'lucide-react';
+import { getSynthesis, fetcher, API_BASE_URL, startSessionTopic } from '../services/api';
 import SkeletonTopic from '../components/Skeletons/SkeletonTopic';
 import { toast } from 'react-hot-toast';
 
-const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
+const CurriculumBrowser = ({ 
+    sessionId, 
+    onBack, 
+    onContinue,
+    prefetchingTopic,
+    setPrefetchingTopic,
+    readyTopics,
+    setReadyTopics
+}) => {
     const { data: sessionData, error, isLoading } = useSWR(
         sessionId ? `${API_BASE_URL}/api/session/${sessionId}` : null,
         fetcher,
@@ -26,9 +36,7 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
     );
 
     const [expandedLectures, setExpandedLectures] = useState({});
-    const [isPrefetchReady, setIsPrefetchReady] = useState(false);
-    const [prefetchTimeout, setPrefetchTimeout] = useState(false);
-    const [pollActive, setPollActive] = useState(true);
+    const [prefetchStatus, setPrefetchStatus] = useState("idle"); // idle | loading | ready | error
 
     const { session, plan } = sessionData || {};
     const structure = plan?.curriculum?.structure || [];
@@ -49,53 +57,108 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
         return target;
     }, [structure, completedTopics]);
 
+    // Step 4 & 5: Polling & Persistence
+    React.useEffect(() => {
+        if (!prefetchingTopic || !session?.student_id) return;
+
+        let pollCount = 0;
+        const maxPolls = 20;
+        const pollInterval = setInterval(async () => {
+            try {
+                if (import.meta.env.DEV) console.log(`>>> [Prefetch] Polling for manual trigger: ${prefetchingTopic} (${pollCount + 1}/${maxPolls})`);
+                const result = await getSynthesis(session.student_id, prefetchingTopic, sessionId);
+                
+                if (result?.final_content || result?.full_text) {
+                    setPrefetchingTopic(null);
+                    setReadyTopics(prev => [...new Set([...prev, prefetchingTopic])]);
+                    clearInterval(pollInterval);
+                }
+            } catch (err) {
+                console.error(">>> [Prefetch] Polling error:", err);
+            }
+
+            pollCount++;
+            if (pollCount >= maxPolls) {
+                setPrefetchingTopic(null);
+                clearInterval(pollInterval);
+            }
+        }, 5000);
+
+        return () => clearInterval(pollInterval);
+    }, [prefetchingTopic, session?.student_id]);
+
+    // Step 5: Persistent Readiness Check on Mount
+    React.useEffect(() => {
+        if (!structure.length || !session?.student_id) return;
+
+        const checkExisting = async () => {
+            const unlockedTopics = [];
+            structure.forEach(lecture => {
+                (lecture.children || []).forEach(topic => {
+                    if (!completedTopics.includes(topic.title)) {
+                        unlockedTopics.push(topic.title);
+                    }
+                });
+            });
+
+            for (const title of unlockedTopics) {
+                try {
+                    const result = await getSynthesis(session.student_id, title, sessionId);
+                    if (result?.final_content || result?.full_text) {
+                        setReadyTopics(prev => [...new Set([...prev, title])]);
+                    }
+                } catch (e) {}
+            }
+        };
+
+        checkExisting();
+    }, [structure.length, session?.student_id]);
+
+    // Existing Prefetch Status Polling (Auto-prefetch for next topic)
+    React.useEffect(() => {
+        if (!nextTopicToLearn || !sessionId || !session?.student_id || prefetchingTopic) return;
+
+        let pollCount = 0;
+        const maxPolls = 10; // 50 seconds total at 5s interval
+        let pollInterval;
+
+        const checkStatus = async () => {
+            try {
+                if (import.meta.env.DEV) console.log(`>>> [Prefetch] Polling status for: ${nextTopicToLearn} (${pollCount + 1}/${maxPolls})`);
+                const synthesis = await getSynthesis(session.student_id, nextTopicToLearn, sessionId);
+                
+                if (synthesis && synthesis.status !== "not_ready") {
+                    if (import.meta.env.DEV) console.log(">>> [Prefetch] Status: READY");
+                    setPrefetchStatus("ready");
+                    clearInterval(pollInterval);
+                } else {
+                    setPrefetchStatus("loading");
+                }
+            } catch (err) {
+                console.error(">>> [Prefetch] Poll failed:", err);
+            }
+
+            pollCount++;
+            if (pollCount >= maxPolls) {
+                if (import.meta.env.DEV) console.log(">>> [Prefetch] Polling timed out");
+                clearInterval(pollInterval);
+                if (prefetchStatus !== "ready") setPrefetchStatus("idle");
+            }
+        };
+
+        // Reset and start polling
+        setPrefetchStatus("loading");
+        checkStatus(); // Initial check
+        pollInterval = setInterval(checkStatus, 5000);
+
+        return () => clearInterval(pollInterval);
+    }, [nextTopicToLearn, sessionId, session?.student_id]);
+
     // Fix 2: Start CV pipeline on module page entry
     React.useEffect(() => {
-        console.log(">>> [CV] Module page mounted. Initializing pedagogical sensing...");
+        if (import.meta.env.DEV) console.log(">>> [CV] Module page mounted. Initializing pedagogical sensing...");
         // Activation is handled by the global LiveAffectSensing in App.jsx
     }, []);
-
-    // Task 2: Poll for prefetch readiness
-    React.useEffect(() => {
-        if (!nextTopicToLearn || !pollActive || !sessionId) return;
-        
-        let elapsed = 0;
-        const intervalId = setInterval(async () => {
-            elapsed += 2;
-            if (elapsed >= 60) {
-                setPrefetchTimeout(true);
-                setPollActive(false);
-                clearInterval(intervalId);
-                return;
-            }
-            
-            try {
-                const url = `${API_BASE_URL}/api/prefetch/status?session_id=${sessionId}&topic_id=${encodeURIComponent(nextTopicToLearn)}`;
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data.ready) {
-                    setIsPrefetchReady(true);
-                    setPollActive(false);
-                    clearInterval(intervalId);
-                }
-            } catch (err) {}
-        }, 2000);
-        
-        // Immediate check
-        (async () => {
-            try {
-                const url = `${API_BASE_URL}/api/prefetch/status?session_id=${sessionId}&topic_id=${encodeURIComponent(nextTopicToLearn)}`;
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data.ready) {
-                    setIsPrefetchReady(true);
-                    setPollActive(false);
-                }
-            } catch (err) {}
-        })();
-
-        return () => clearInterval(intervalId);
-    }, [nextTopicToLearn, pollActive, sessionId]);
 
     const toggleLecture = (index) => {
         setExpandedLectures(prev => ({
@@ -239,7 +302,6 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                                                     const isCompleted = completedTopics.includes(topic.title);
                                                     const isLocked = !isCompleted && topic.title !== nextTopicToLearn;
                                                     const isNext = topic.title === nextTopicToLearn;
-                                                    const isPollingDisabled = isNext && (!isPrefetchReady && !prefetchTimeout);
                                                     
                                                     return (
                                                         <div
@@ -262,33 +324,47 @@ const CurriculumBrowser = ({ sessionId, onBack, onContinue }) => {
                                                                 )}>
                                                                     {topic.title}
                                                                 </span>
+                                                                {topic.title === prefetchingTopic && (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 rounded-full border border-amber-500/20 animate-pulse">
+                                                                        <Loader2 size={10} className="text-amber-500 animate-spin" />
+                                                                        <span className="text-[9px] font-black uppercase tracking-widest text-amber-500">Synthesizing...</span>
+                                                                    </div>
+                                                                )}
+                                                                {isNext && prefetchStatus === "loading" && topic.title !== prefetchingTopic && (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-primary/5 rounded-full border border-primary/10 animate-pulse">
+                                                                        <div className="w-1.5 h-1.5 bg-primary rounded-full" />
+                                                                        <span className="text-[9px] font-black uppercase tracking-widest text-primary">Preparing lesson...</span>
+                                                                    </div>
+                                                                )}
+                                                                {(readyTopics.includes(topic.title) || (isNext && prefetchStatus === "ready")) && (
+                                                                    <div className="flex items-center gap-2 px-3 py-1 bg-secondary/5 rounded-full border border-secondary/10">
+                                                                        <Zap size={10} className="text-secondary fill-secondary" />
+                                                                        <span className="text-[9px] font-black uppercase tracking-widest text-secondary">Instant Load Ready</span>
+                                                                    </div>
+                                                                )}
                                                             </div>
 
                                                             <button
                                                                 onClick={() => {
                                                                     if (!isLocked) {
-                                                                        if (isNext) setPollActive(false);
                                                                         onContinue({
                                                                             ...topic,
                                                                             collectionId: plan?.system_metadata?.collection_id
                                                                         });
                                                                     }
                                                                 }}
-                                                                disabled={isLocked || isPollingDisabled}
+                                                                disabled={isLocked}
                                                                 className={clsx(
                                                                     "flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all",
-                                                                    isLocked ? "bg-zinc-200 dark:bg-white/5 text-zinc-400" : (isCompleted
+                                                                    (isLocked || topic.title === prefetchingTopic) ? "bg-zinc-200 dark:bg-white/5 text-zinc-400" : (isCompleted
                                                                         ? "bg-zinc-100 dark:bg-white/5 text-zinc-400 dark:text-slate-500 hover:bg-primary/10 hover:text-primary"
-                                                                        : "bg-primary text-white shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100")
+                                                                        : (readyTopics.includes(topic.title) || prefetchStatus === "ready")
+                                                                            ? "bg-secondary text-white shadow-lg shadow-secondary/30 ring-2 ring-secondary/20 hover:scale-105 active:scale-95"
+                                                                            : "bg-primary text-white shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100")
                                                                 )}
                                                             >
-                                                                {isLocked ? "Locked" : (isCompleted ? "Review Node" : (isPollingDisabled ? (
-                                                                    <>
-                                                                        <Loader2 size={14} className="animate-spin" />
-                                                                        <span className="animate-pulse">Preparing...</span>
-                                                                    </>
-                                                                ) : "Continue to Learn"))}
-                                                                {!isPollingDisabled && <PlayCircle size={14} />}
+                                                                {topic.title === prefetchingTopic ? "Synthesizing..." : (isLocked ? "Locked" : (isCompleted ? "Review Node" : "Continue to Learn"))}
+                                                                <PlayCircle size={14} />
                                                             </button>
                                                         </div>
                                                     );

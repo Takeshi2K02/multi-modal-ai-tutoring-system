@@ -9,7 +9,7 @@ const LiveAffectSensing = ({ userId, materialId = "active_lesson", enabled = fal
 
     useEffect(() => {
         if (!enabled) {
-            console.log(">>> [CV] Camera disabled by prop. Cleaning up.");
+            if (import.meta.env.DEV) console.log(">>> [CV] Camera disabled by prop. Cleaning up.");
             if (streamRef.current) {
                 streamRef.current.getTracks().forEach(t => t.stop());
                 streamRef.current = null;
@@ -28,7 +28,7 @@ const LiveAffectSensing = ({ userId, materialId = "active_lesson", enabled = fal
                 if (videoRef.current) {
                     videoRef.current.srcObject = stream;
                     setCameraActive(true);
-                    console.log(">>> [CV] Camera Activated Globally");
+                    if (import.meta.env.DEV) console.log(">>> [CV] Camera Activated Globally");
                 }
             } catch (err) {
                 console.error(">>> [CV] Camera Access Denied:", err);
@@ -38,7 +38,7 @@ const LiveAffectSensing = ({ userId, materialId = "active_lesson", enabled = fal
         startCamera();
 
         const captureInterval = setInterval(() => {
-            if (videoRef.current && canvasRef.current && cameraActive && enabled) {
+            if (videoRef.current && canvasRef.current && streamRef.current && enabled) {
                 const canvas = canvasRef.current;
                 const video = videoRef.current;
 
@@ -63,14 +63,14 @@ const LiveAffectSensing = ({ userId, materialId = "active_lesson", enabled = fal
         }, 2000); // 2s interval for background monitoring
 
         return () => {
-            console.log(">>> [CV] Cleaning up global camera stream");
+            if (import.meta.env.DEV) console.log(">>> [CV] Cleaning up global camera stream");
             clearInterval(captureInterval);
             if (streamRef.current) {
                 streamRef.current.getTracks().forEach(t => t.stop());
                 streamRef.current = null;
             }
         };
-    }, [userId, materialId, cameraActive, enabled]);
+    }, [userId, materialId, enabled]);
 
     return (
         <div className="fixed bottom-4 right-4 z-[9999] pointer-events-none opacity-0 overflow-hidden w-1 h-1">

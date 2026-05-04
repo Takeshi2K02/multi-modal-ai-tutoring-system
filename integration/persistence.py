@@ -55,13 +55,14 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
     db.StudentEngagement.insert_one(log_entry)
     
     # Project ID: 25-26J-130: Clean Logging & Throttling
+    # Project ID: 25-26J-130: State-Change Only Logging (Throttle: 10s)
     global _last_cv_print_time, _last_cv_state
     now = time.time()
     state_changed = (emotion != _last_cv_state["emotion"]) or (abs(engagement_score - _last_cv_state["score"]) > 0.3)
-    heartbeat = (now - _last_cv_print_time) >= 30
+    throttle_expired = (now - _last_cv_print_time) >= 10
 
-    if state_changed or (heartbeat and (engagement_score < 0.5 or engagement_score > 0.9)):
-        print(f"[CV] Engagement: {engagement_score:.2f} | Emotion: {emotion} {'(State Change)' if state_changed else '(Threshold Heartbeat)'}")
+    if state_changed and throttle_expired:
+        print(f"[CV] Engagement: {engagement_score:.2f} | Emotion: {emotion}")
         _last_cv_print_time = now
         _last_cv_state = {"emotion": emotion, "score": engagement_score}
     
@@ -73,6 +74,10 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
     
     # --- RL BRIDGE: Trigger Policy Inference on Heartbeat (Project ID: 25-26J-130) ---
     try:
+        from core.state import is_tot_running, active_student_synthesis
+        if is_tot_running or user_id in active_student_synthesis:
+            return
+            
         # 1. Fetch Student Profile & Feedback Signal (Project ID: 25-26J-130)
         profile = db.student_profiles.find_one({"student_id": user_id}) or {}
         latest_feedback = db.FeedbackSignals.find_one({"student_id": user_id}, sort=[("timestamp", -1)])
@@ -84,9 +89,10 @@ async def push_cv_data(user_id: str, engagement_score: float, emotion: str,
         distribution = agent.get_action_distribution(engagement_score, emotion, profile, feedback_signal=feedback_val)
         decision = agent.select_action(distribution)
         
-        # Project ID: 25-26J-130: DQN Action & State Vector Snapshot
-        f_info = f" | fdbk={feedback_val}" if feedback_val is not None else ""
-        print(f"[DQN] State: eng={engagement_score:.2f}, emo={emotion}{f_info} | Action: {decision['policy_name']} (Conf: {decision['confidence']:.2f})")
+        # Project ID: 25-26J-130: Signal-Only DQN Logging
+        if decision['policy_name'] != "Maintain Current Content":
+            f_info = f" | fdbk={feedback_val}" if feedback_val is not None else ""
+            print(f"[DQN] State: eng={engagement_score:.2f}, emo={emotion}{f_info} | Action: {decision['policy_name']} (Conf: {decision['confidence']:.2f})")
         
         # 3. Emit Policy Update for Live Monitor
         await _emit_event("policy_update", {

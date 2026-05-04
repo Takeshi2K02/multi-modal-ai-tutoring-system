@@ -58,12 +58,18 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
 )
 
+# Project ID: 25-26J-130: Silence noisy backend logs
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['GLOG_minloglevel'] = '2'
+
 class EndpointFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
         return msg.find("/api/engagement/track") == -1 and \
                msg.find("/api/telemetry/rl") == -1 and \
                msg.find("/api/analytics/latest") == -1 and \
+               msg.find("/api/analytics/historical") == -1 and \
+               msg.find("/api/session/") == -1 and \
                msg.find("/api/prefetch/status") == -1 and \
                msg.find("/socket.io/") == -1
 
@@ -156,7 +162,8 @@ async def monitor_interventions():
                 await asyncio.sleep(10)
                 continue
 
-            if student_id in active_student_synthesis:
+            from core.state import is_tot_running
+            if student_id in active_student_synthesis or is_tot_running:
                 await asyncio.sleep(10)
                 continue
 

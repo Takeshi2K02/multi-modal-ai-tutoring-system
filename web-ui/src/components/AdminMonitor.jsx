@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { io } from 'socket.io-client';
 import { motion } from 'framer-motion';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -15,7 +14,7 @@ function cn(...inputs) {
     return twMerge(clsx(inputs));
 }
 
-const socket = io('http://localhost:8000');
+import { socket } from '../services/socket';
 const CV_BACKEND = "http://localhost:8000";
 
 const AdminMonitor = () => {
@@ -33,7 +32,7 @@ const AdminMonitor = () => {
 
     // 1. WebSocket Listeners (Aligned with persistence.py)
     useEffect(() => {
-        socket.on('cv_update', (data) => {
+        const handleCvUpdate = (data) => {
             setCvData((prev) => [...prev.slice(-80), {
                 time: new Date(data.timestamp).toLocaleTimeString(),
                 score: data.engagement_score,
@@ -43,37 +42,43 @@ const AdminMonitor = () => {
                 state: data.engagement_state
             }]);
             setLogs((prev) => [{ type: 'CV', data }, ...prev.slice(0, 49)]);
-        });
+        };
 
-        socket.on('rl_update', (data) => {
+        const handleRlUpdate = (data) => {
             setRlData(data);
             setLogs((prev) => [{ type: 'RL', data }, ...prev.slice(0, 49)]);
-        });
+        };
 
-        socket.on('tot_step', (data) => {
+        const handleTotStep = (data) => {
             setTotSteps((prev) => [...prev, data]);
             if (data.snapshot?.deviation_alert) {
                 setDeviationAlert(true);
             }
             setLogs((prev) => [{ type: 'ToT_STEP', data }, ...prev.slice(0, 49)]);
-        });
+        };
 
-        socket.on('tot_final', (data) => {
+        const handleTotFinal = (data) => {
             setLogs((prev) => [{ type: 'ToT_FINAL', data }, ...prev.slice(0, 49)]);
-        });
+        };
 
-        socket.on('policy_update', (data) => {
+        const handlePolicyUpdate = (data) => {
             setPolicyDistribution(data.distribution);
             setRlData(data.selected_action);
             setLogs((prev) => [{ type: 'POLICY', data }, ...prev.slice(0, 49)]);
-        });
+        };
+
+        socket.on('cv_update', handleCvUpdate);
+        socket.on('rl_update', handleRlUpdate);
+        socket.on('tot_step', handleTotStep);
+        socket.on('tot_final', handleTotFinal);
+        socket.on('policy_update', handlePolicyUpdate);
 
         return () => {
-            socket.off('cv_update');
-            socket.off('rl_update');
-            socket.off('tot_step');
-            socket.off('tot_final');
-            socket.off('policy_update');
+            socket.off('cv_update', handleCvUpdate);
+            socket.off('rl_update', handleRlUpdate);
+            socket.off('tot_step', handleTotStep);
+            socket.off('tot_final', handleTotFinal);
+            socket.off('policy_update', handlePolicyUpdate);
         };
     }, []);
 

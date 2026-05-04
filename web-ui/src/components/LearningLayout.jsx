@@ -1,10 +1,8 @@
 import React from 'react';
-import LiveAffectSensing from './LiveAffectSensing';
 
-const LearningLayout = ({ children, studentId = localStorage.getItem('userId'), topicId, enabled = false }) => {
+const LearningLayout = ({ children }) => {
     return (
         <div className="h-full w-full relative">
-            <LiveAffectSensing userId={studentId} materialId={topicId} enabled={enabled} />
             {children}
         </div>
     );

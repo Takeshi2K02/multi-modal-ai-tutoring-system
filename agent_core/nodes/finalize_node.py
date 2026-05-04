@@ -1,5 +1,5 @@
 import asyncio, re, json, time, os
-from datetime import datetime
+from datetime import datetime, timedelta
 from bson import ObjectId
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -124,8 +124,36 @@ async def finalize_output(state: AgentState) -> AgentState:
             inner = match.group(1)
             # Remove markdown bold/italics often hallucinated by LLMs inside mermaid
             inner = re.sub(r"\*\*|\_\_", "", inner)
-            return f"[MERMAID_START]\n{inner.strip()}\n[MERMAID_END]"
-        return re.sub(r"\[MERMAID_START\](.*?)\[MERMAID_END\]", clean_mermaid, text, flags=re.DOTALL)
+            
+            # Critical 5: Strict Sanitization
+            lines = inner.split('\n')
+            valid_lines = []
+            for line in lines:
+                l = line.strip()
+                # Match nodeId --> nodeId or nodeId["label"] or graph TD etc.
+                if any(l.startswith(kw) for kw in ["graph", "erDiagram", "flowchart", "sequenceDiagram", "subgraph", "end", "class"]):
+                    valid_lines.append(l)
+                    continue
+                
+                # Replace parentheses in labels with square brackets
+                l = l.replace('(', '[').replace(')', ']')
+                
+                # Check for valid edge patterns
+                if "-->" in l or "---" in l or "-> " in l:
+                    valid_lines.append(l)
+            
+            # Integrity Check: If fewer than 2 valid edges remain, skip Mermaid
+            edge_count = sum(1 for l in valid_lines if any(op in l for op in ["-->", "---", "-> "]))
+            if edge_count < 2:
+                print(f"[Mermaid] ❌ Structural integrity lost ({edge_count} edges). Skipping diagram.")
+                return "[MERMAID_SKIPPED]"
+                
+            return f"[MERMAID_START]\n" + "\n".join(valid_lines) + "\n[MERMAID_END]"
+        
+        text = re.sub(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", clean_mermaid, text)
+        if "[MERMAID_SKIPPED]" in text:
+            return text.replace("[MERMAID_SKIPPED]", "")
+        return text
 
     start_time = state.get("build_time", time.time())
     precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
@@ -279,9 +307,39 @@ async def finalize_output(state: AgentState) -> AgentState:
             }
             r.setex(prefetch_key, 1800, json.dumps(payload))
             print(f"[Prefetch] ✅ Background ToT result stored in Redis | key: {prefetch_key}")
+
+            # Project ID: 25-26J-130: Phase 21: Persistent Synthesis (MongoDB)
+            from db.connection import get_db_connection
+            db = get_db_connection()
+            
+            synthesis_doc = {
+                "student_id": state["student_id"],
+                "session_id": state["context_data"].get("session_id"),
+                "topic_id": topic_id,
+                "synthesis_id": interaction_id,
+                "final_content": full_lesson,
+                "full_text": full_lesson,
+                "strategy": strategy_label,
+                "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+                "rag_sources": state["context_data"].get("rag_sources", []),
+                "interaction_id": interaction_id,
+                "created_at": datetime.utcnow(),
+                "expires_at": datetime.utcnow() + timedelta(hours=24)
+            }
+            
+            db.lesson_synthesis.update_one(
+                {
+                    "student_id": state["student_id"], 
+                    "session_id": state["context_data"].get("session_id"),
+                    "topic_id": topic_id
+                },
+                {"$set": synthesis_doc},
+                upsert=True
+            )
+            print(f"[Prefetch] ✅ Background ToT result stored in MongoDB for topic: {topic_id}")
         except Exception as e:
-            print(f"[Prefetch] ⚠️ Failed to store prefetch in Redis: {e}")
-        
+            print(f"[Prefetch] ⚠️ Failed to store prefetch: {e}")
+
         # Skip socket emission during prefetch run
         return {
             **state,
