@@ -60,13 +60,21 @@ async def background_synthesis(state: AgentState) -> AgentState:
 
     # 3. Broadcast Shadow Ready via Socket.io
     print("[ToT] 📡 Emitting shadow_ready event...")
+    student_id = state["student_id"]
     await sio.emit("shadow_ready", {
-        "student_id": state["student_id"],
+        "student_id": student_id,
         "interaction_id": state.get("interaction_id"),
-        "shadow_content": shadow_lesson,
-        "modality": "VISUAL" if "[MERMAID_START]" in shadow_lesson else "TEXTUAL",
+        "full_text": shadow_lesson,
+        "current_modality": "VISUAL" if "[MERMAID_START]" in shadow_lesson else "TEXTUAL",
         "alternative_label": "Visual Analogy" if "[MERMAID_START]" in shadow_lesson else "Simplified Text"
-    })
+    }, room=student_id)
+
+    # Bug 3: Add "pending acceptance" gate
+    from core.state import waiting_for_user_decision
+    waiting_for_user_decision[student_id] = True
+
+    # Bug 2: Explicit Emission Logging
+    print(f">>> [Shadow] ✅ shadow_ready emitted to room: {student_id} | full_text length: {len(shadow_lesson)} | modality: {'VISUAL' if '[MERMAID_START]' in shadow_lesson else 'TEXTUAL'}")
 
     print("[ToT] ✅ Shadow ToT Synthesis Complete & Broadcasted.")
     return {**state, "shadow_frontier": [shadow_best]}

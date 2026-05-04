@@ -77,7 +77,7 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, onPrefetchStarted 
                 {/* Suggestions & Profile Adaptation Toasts */}
                 <div className="fixed bottom-12 right-12 z-[100] flex flex-col gap-4 items-end">
                     <AnimatePresence>
-                        {data.shadowReady && !data.isThinking && (
+                        {data.shadowReady && (
                             <motion.div initial={{ opacity: 0, y: 20, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.9 }} className="p-6 bg-zinc-900 border border-secondary/30 backdrop-blur-3xl rounded-[32px] shadow-2xl flex items-center justify-between gap-6 max-w-md">
                                 <div className="flex items-center gap-4">
                                     <div className="w-12 h-12 rounded-2xl bg-secondary/10 flex items-center justify-center text-secondary border border-secondary/20"><Sparkles size={24} /></div>
@@ -86,7 +86,10 @@ const LessonView = ({ sessionId, topic, onBack, onReady, sio, onPrefetchStarted 
                                         <p className="text-sm font-light text-zinc-300">Switch to <strong>{data.shadowReady.alternative_label}</strong> for better engagement?</p>
                                     </div>
                                 </div>
-                                <button onClick={data.handleAcceptShadow} className="px-6 py-3 bg-secondary text-white text-[10px] font-black uppercase tracking-widest rounded-full hover:scale-105 active:scale-95 transition-all">Swap</button>
+                                <div className="flex flex-col gap-2">
+                                    <button onClick={data.handleAcceptShadow} className="px-6 py-3 bg-secondary text-white text-[10px] font-black uppercase tracking-widest rounded-full hover:scale-105 active:scale-95 transition-all">Swap</button>
+                                    <button onClick={data.handleDismissShadow} className="text-[9px] font-bold text-zinc-500 uppercase tracking-tighter hover:text-zinc-300 transition-colors">Dismiss</button>
+                                </div>
                             </motion.div>
                         )}
 

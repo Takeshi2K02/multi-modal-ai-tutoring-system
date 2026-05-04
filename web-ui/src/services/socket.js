@@ -10,11 +10,11 @@ const getSocket = () => {
       console.log(">>> [Pipeline] Creating Global Socket Instance");
     }
     window.__EDUSYNTH_SOCKET__ = io('http://localhost:8000', {
-      auth: { token: localStorage.getItem("token") },
+      auth: { token: null },
       transports: ["websocket"],
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
     });
 

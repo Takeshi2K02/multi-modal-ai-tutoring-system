@@ -179,6 +179,9 @@ async def accept_shadow_intervention(req: AcceptShadowRequest):
             
             # 3. Emit real-time profile updated event
             from socket_manager import sio
+            import core.state
+            core.state.waiting_for_user_decision[req.student_id] = 0
+
             await sio.emit("profile_updated", {
                 "student_id": req.student_id,
                 "modality": target,

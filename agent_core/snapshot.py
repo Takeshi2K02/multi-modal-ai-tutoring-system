@@ -31,11 +31,24 @@ def calculate_lesson_benchmark(text: str, student_profile: dict, topic: str = ""
     # Minimum floor of 30s
     return max(30, estimated_time)
 
+# Consecutive Reading Debounce (Project ID: 25-26J-130)
+_consecutive_drops = 0  # Persistence across monitor cycles
+_last_eligible_logged = False
+_last_snapshot_logged = {"needed": None, "drops": -1}
+
+def reset_intervention_counter(silent=False):
+    """Project ID: 25-26J-130: Resets the consecutive drops counter."""
+    global _consecutive_drops
+    _consecutive_drops = 0
+    if not silent:
+        print("[Snapshot] 🔄 Intervention counter reset to 0.")
+
 def get_student_snapshot(user_id: str, session_start_time: float = None) -> StudentStateSnapshot:
     """
     Performs a non-blocking find_one (sort by latest) for both CV and RL data.
     Calculates engagement trends and deviations.
     """
+    global _consecutive_drops
     db = _get_db()
 
     # 1. Fetch Latest CV Data
@@ -74,11 +87,11 @@ def get_student_snapshot(user_id: str, session_start_time: float = None) -> Stud
             deviation_alert=False
         )
 
-    # 4. Calculate Historical Average & Trend (last 10s for ultra-sensitive test)
-    thirty_seconds_ago = datetime.now() - timedelta(seconds=10)
+    # 4. Calculate Historical Average & Trend (45s sliding window for Problem 4)
+    forty_five_seconds_ago = datetime.now() - timedelta(seconds=45)
     recent_logs = list(db.StudentEngagement.find({
         "user_id": user_id,
-        "timestamp": {"$gte": thirty_seconds_ago}
+        "timestamp": {"$gte": forty_five_seconds_ago}
     }).sort("timestamp", -1))
 
     # Engagement Trend
@@ -88,18 +101,12 @@ def get_student_snapshot(user_id: str, session_start_time: float = None) -> Stud
         if diff > 0.15: trend = "improving"
         elif diff < -0.15: trend = "declining"
 
-    # Historical Average for Intervention Trigger
-    hist_avg = 0.5
-    if recent_logs:
-        hist_avg = sum(l["engagement_score"] for l in recent_logs) / len(recent_logs)
-
     # 5. Intervention Trigger (Project ID: 25-26J-130)
-    MAX_SESSION_S = 3600 # 1-hour session benchmark (Issue 4)
+    MAX_SESSION_S = 3600 
     
     intervention_needed = False
     session_fatigue = 0.0
     
-    # Critical 2: Reset fatigue per pipeline invocation if session_start_time is provided
     if session_start_time:
         time_elapsed = time.time() - session_start_time
         session_fatigue = min(time_elapsed / MAX_SESSION_S, 1.0)
@@ -110,43 +117,39 @@ def get_student_snapshot(user_id: str, session_start_time: float = None) -> Stud
         )
         
         if latest_interaction:
-            # Get current session start time (first interaction within a continuous block, or last 2 hours)
             two_hours_ago = datetime.now() - timedelta(hours=2)
             session_start = db.interactions.find_one(
                 {"student_id": user_id, "timestamp": {"$gte": two_hours_ago}},
                 sort=[("timestamp", 1)]
             )
             start_time_db = session_start.get("timestamp") if session_start else latest_interaction.get("timestamp", datetime.now())
-            
             time_since_last = (datetime.now() - latest_interaction.get("timestamp", datetime.now())).total_seconds()
             
-            # Reset elapsed tracking if there's been a long break (> 1 hour)
             if time_since_last > 3600:
                 time_elapsed = 0.0
-                session_fatigue = 0.0
             else:
                 time_elapsed = (datetime.now() - start_time_db).total_seconds()
-                session_fatigue = min(time_elapsed / MAX_SESSION_S, 1.0)
+            session_fatigue = min(time_elapsed / MAX_SESSION_S, 1.0)
         else:
             time_elapsed = 0.0
             session_fatigue = 0.0
             
-    reading_time = MAX_SESSION_S
-    is_done = False # Default for live snapshot
+    is_ready = time_elapsed > 5 # TEMP: testing only
     
-    # Only print occasionally to reduce noise
-    if time_elapsed > 0 and int(time_elapsed) % 15 == 0:
-        print(f"[DQN State] session_fatigue={session_fatigue:.4f} elapsed={time_elapsed:.1f}s max={MAX_SESSION_S}s")
-    
-    # Readiness Guard
-    is_recent = time_elapsed < 600 # 10 minutes
-    is_ready = reading_time > 0
-    
-    if is_recent and is_ready and time_elapsed > reading_time and hist_avg < 0.98:
-        intervention_needed = True
-        # Log only if significantly past benchmark to reduce noise
-        if int(time_elapsed) % 30 == 0:
-            print(f"[Snapshot Debug] 🎯 INTERVENTION ELIGIBLE for {user_id} (Elapsed: {time_elapsed:.0f}s)")
+    # Problem 4: Sliding Window Logic
+    window_avg = 0.0
+    sample_count = len(recent_logs)
+    if sample_count >= 3:
+        window_avg = sum(l["engagement_score"] for l in recent_logs) / sample_count
+        # Stable threshold check
+        if is_ready and window_avg < 0.55: 
+            intervention_needed = True
+
+    # Diagnostic Log (Project ID: 25-26J-130) - Rule 1: only log on state change
+    global _last_snapshot_logged
+    if intervention_needed != _last_snapshot_logged["needed"] or abs(window_avg - _last_snapshot_logged.get("avg", 0)) > 0.05:
+        print(f"🎯 [Intervention Check] window_avg={window_avg:.2f} ({sample_count} samples) | elapsed={time_elapsed:.1f}s | intervention_needed={intervention_needed}")
+        _last_snapshot_logged = {"needed": intervention_needed, "avg": window_avg}
 
     # 6. Map Action ID to Policy Name
     action_id = latest_rl.get("action_id", 0) if latest_rl else 0

@@ -45,10 +45,17 @@ from jose import jwt
 
 # Core auth & state
 from core.auth import SECRET_KEY, ALGORITHM
-from core.state import active_student_synthesis, triggered_interventions
+import core.state
 
 # Initialize FastAPI
 fastapi_app = FastAPI()
+
+# Project ID: 25-26J-130: Log Deduplication State
+_last_monitor_status = {} # student_id -> last_status_string
+_busy_logged = False # Global flag for Rule 2
+
+import redis
+redis_client = redis.Redis(host=os.getenv("REDIS_HOST", "localhost"), port=6379, db=0)
 
 fastapi_app.add_middleware(
     CORSMiddleware,
@@ -117,6 +124,29 @@ async def handle_join_room(sid, data):
     await sio.enter_room(sid, requested_room)
     print(f"[Room] {sid} joined room: {requested_room}")
 
+@sio.on("lesson_entered")
+async def handle_lesson_entered(sid, data):
+    student_id = data.get("student_id")
+    topic_id = data.get("topic_id")
+    core.state.active_lesson[student_id] = topic_id
+    await sio.enter_room(sid, student_id)
+    print(f"[Lesson] ✅ {student_id} joined room and entered: {topic_id}")
+
+@sio.on("lesson_exited")
+async def handle_lesson_exited(sid, data):
+    student_id = data.get("student_id")
+    core.state.active_lesson[student_id] = None
+    await sio.leave_room(sid, student_id)
+    print(f"[Lesson] 👋 {student_id} left room and exited lesson")
+
+@sio.on("intervention_resolved")
+async def on_intervention_resolved(sid, data):
+    student_id = data.get("student_id")
+    core.state.waiting_for_user_decision[student_id] = 0
+    from agent_core.snapshot import reset_intervention_counter
+    reset_intervention_counter()
+    print(f">>> [Intervention] ✅ User resolved intervention for {student_id}")
+
 from db.connection import get_db_connection
 from services.vector_factory import get_vector_db
 
@@ -159,11 +189,42 @@ async def monitor_interventions():
             last_ping = latest_engagement.get("timestamp")
             
             if (datetime.now() - last_ping).total_seconds() > 30:
-                await asyncio.sleep(10)
+                await asyncio.sleep(3)
+                continue
+            
+            # Bug 2: Active Lesson Gate
+            if core.state.active_lesson.get(student_id) is None:
+                await asyncio.sleep(3)
+                continue
+
+            # Problem 3: Decision Window Timeout (60s)
+            decision_timestamp = core.state.waiting_for_user_decision.get(student_id, 0)
+            if decision_timestamp > 0 and (time.time() - decision_timestamp) > 60:
+                print(f">>> [Intervention] ⏱️ User decision window timed out for {student_id}. Resetting to IDLE.")
+                core.state.waiting_for_user_decision[student_id] = 0
+
+            # Bug 3: Waiting for user decision gate
+            if core.state.waiting_for_user_decision.get(student_id, 0) > 0:
+                if _last_monitor_status.get(student_id) != "AWAITING":
+                    print(f"🎯 [Intervention Check] student={student_id} | status=AWAITING_USER_DECISION — skipping")
+                    _last_monitor_status[student_id] = "AWAITING"
+                
+                from agent_core.snapshot import reset_intervention_counter
+                reset_intervention_counter(silent=True) 
+                await asyncio.sleep(3)
+                continue
+
+            # Problem 5: Redis Shadow Lock Check
+            lock_key = f"shadow_lock:{student_id}"
+            if redis_client.exists(lock_key):
+                if _last_monitor_status.get(student_id) != "LOCK":
+                    print(f"🎯 [Intervention Check] student={student_id} | status=LOCKED (Redis) — skipping")
+                    _last_monitor_status[student_id] = "LOCK"
+                await asyncio.sleep(3)
                 continue
 
             from core.state import is_tot_running
-            if student_id in active_student_synthesis or is_tot_running:
+            if student_id in core.state.active_student_synthesis or is_tot_running:
                 await asyncio.sleep(10)
                 continue
 
@@ -177,54 +238,119 @@ async def monitor_interventions():
                 
                 if latest_inter:
                     inter_id = str(latest_inter["_id"])
-                    if inter_id not in triggered_interventions:
-                        query = latest_inter.get("query")
-                        if not query:
-                            print(f">>> [Intervention] ⚠️ Skipping {inter_id}: Missing user query.")
-                            continue
+                    
+                    # Problem 1: Cooldown Registry Check
+                    registry = core.state.triggered_interventions.get(inter_id, {"count": 0, "last_trigger": 0})
+                    in_cooldown = (time.time() - registry["last_trigger"]) < 120
+                    at_cap = registry["count"] >= 3
 
-                        print(f">>> [Intervention] 🛰️ Stagnation Detected for {inter_id}. Triggering Shadow ToT...")
-                        print(f"[Pipeline] ⚠️ ToT Trigger: Engagement drop detected. Branching alternative paths...")
+                    if at_cap:
+                        if _last_monitor_status.get(student_id) != "CAP":
+                            print(f"🎯 [Intervention Check] student={student_id} | status=CAP_REACHED (3/3) — skipping")
+                            _last_monitor_status[student_id] = "CAP"
+                        continue
+
+                    if in_cooldown:
+                        if _last_monitor_status.get(student_id) != "COOLDOWN":
+                            print(f"🎯 [Intervention Check] student={student_id} | status=COOLDOWN — skipping")
+                            _last_monitor_status[student_id] = "COOLDOWN"
+                        continue
                         
-                        async def run_shadow():
-                            try:
-                                agent = create_tot_graph()
-                                initial_state = {
-                                    "student_id": student_id,
-                                    "user_query": latest_inter["query"],
-                                    "context_data": {"snapshot": snapshot.dict()},
-                                    "profile": None,
-                                    "frontier": [],
-                                    "tree_memory": {},
-                                    "best_node": None,
-                                    "student_preferences": {},
-                                    "strategy_blacklist": [],
-                                    "teaching_strategy": None,
-                                    "final_response": None,
-                                    "reasoning_trace": [],
-                                    "build_time": 0.0,
-                                    "stop_early": False,
-                                    "selected_strategy_label": None,
-                                    "interaction_outcome": None,
-                                    "interaction_id": inter_id
-                                }
-                                await agent.ainvoke(initial_state)
-                                triggered_interventions.add(inter_id)
-                                
-                                # Project ID: 25-26J-130: Mark as stagnation event for analytics
-                                db.interactions.update_one(
-                                    {"_id": latest_inter["_id"]},
-                                    {"$set": {"is_stagnation_event": True}}
-                                )
-                            except Exception as e:
-                                print(f">>> [Intervention] Shadow Run Failed: {e}")
+                    if core.state.shadow_tot_in_progress:
+                        # Rule 2: BUSY skipping
+                        global _busy_logged
+                        if not _busy_logged:
+                            print(f"🎯 [Intervention Check] student={student_id} | status=BUSY (ToT in progress) — skipping")
+                            _busy_logged = True
+                            _last_monitor_status[student_id] = "BUSY"
+                        
+                        from agent_core.snapshot import reset_intervention_counter
+                        reset_intervention_counter(silent=True) 
+                        continue
+                    else:
+                        _busy_logged = False 
+                        _last_monitor_status[student_id] = "IDLE"
+
+                    print(f">>> [Intervention] 🛰️ Stagnation Detected for {inter_id}. (Trigger {registry['count']+1}/3)")
+                    
+                    # Problem 5: Set Redis Lock IMMEDIATELY
+                    redis_client.setex(lock_key, 150, "locked")
+                    
+                    async def run_shadow_task():
+                        try:
+                            core.state.shadow_tot_in_progress = True
+                            print(f">>> [Intervention] 🚀 Shadow ToT started for {student_id}")
                             
-                        asyncio.create_task(run_shadow())
+                            # Reset counter fresh for the new run
+                            from agent_core.snapshot import reset_intervention_counter
+                            reset_intervention_counter()
+                            
+                            agent = create_tot_graph()
+                            initial_state = {
+                                "student_id": student_id,
+                                "user_query": latest_inter["query"],
+                                "context_data": {"snapshot": snapshot.dict()},
+                                "profile": None,
+                                "frontier": [],
+                                "tree_memory": {},
+                                "best_node": None,
+                                "student_preferences": {},
+                                "strategy_blacklist": [],
+                                "teaching_strategy": None,
+                                "final_response": None,
+                                "reasoning_trace": [],
+                                "build_time": 0.0,
+                                "stop_early": False,
+                                "selected_strategy_label": None,
+                                "interaction_outcome": None,
+                                "interaction_id": inter_id
+                            }
+                            # Bug 1: Safety Timeout (90s)
+                            await asyncio.wait_for(agent.ainvoke(initial_state), timeout=90)
+                            
+                            # Problem 1: Increment Cooldown Registry on success
+                            reg = core.state.triggered_interventions.get(inter_id, {"count": 0, "last_trigger": 0})
+                            reg["count"] += 1
+                            reg["last_trigger"] = time.time()
+                            core.state.triggered_interventions[inter_id] = reg
+
+                            # Problem 2: Fresh Interaction Anchor
+                            new_inter_id = f"re-{int(time.time())}-{inter_id}"
+                            db.interactions.insert_one({
+                                "student_id": student_id,
+                                "query": latest_inter["query"],
+                                "timestamp": datetime.now(),
+                                "parent_interaction_id": inter_id,
+                                "re_intervention": True,
+                                "is_stagnation_event": False # Fresh start
+                            })
+                            
+                            # Problem 3: Mark Decision Timestamp
+                            core.state.waiting_for_user_decision[student_id] = time.time()
+
+                            # Project ID: 25-26J-130: Mark as stagnation event for analytics
+                            db.interactions.update_one(
+                                {"_id": latest_inter["_id"]},
+                                {"$set": {"is_stagnation_event": True}}
+                            )
+                        except asyncio.TimeoutError:
+                            print(">>> [Intervention] ⚠️ Shadow ToT timed out after 90s")
+                        except Exception as e:
+                            print(f">>> [Intervention] ❌ Shadow ToT failed: {e}")
+                        finally:
+                            core.state.shadow_tot_in_progress = False
+                            global _busy_logged
+                            _busy_logged = False 
+                            # Problem 5: Cleanup Redis Lock
+                            redis_client.delete(lock_key)
+                            print(f">>> [Intervention] 🔓 Shadow ToT lock released for {student_id}")
+                        
+                    asyncio.create_task(run_shadow_task())
 
         except Exception as e:
             print(f">>> [Intervention] Monitor Error: {e}")
             
-        await asyncio.sleep(10)
+        await asyncio.sleep(3) # TEMP: testing only — revert before production # Production values: 10
 
 @fastapi_app.on_event("startup")
 async def startup_event():

@@ -120,6 +120,7 @@ export const useLessonData = (sessionId, topic, onBack, onReady, sio, onPrefetch
         };
 
         const handleShadowReady = (data) => {
+            console.error("[SHADOW] shadow_ready received:", data);
             setShadowReady(data);
             if (data.interaction_id) setInteractionId(data.interaction_id);
         };
@@ -155,7 +156,9 @@ export const useLessonData = (sessionId, topic, onBack, onReady, sio, onPrefetch
 
         sio.on("connect", handleConnect);
         sio.on('tot_final', handleTotFinal);
+        
         sio.on('shadow_ready', handleShadowReady);
+        
         sio.on('synthesis_complete', handleSynthesisComplete);
         sio.on('profile_updated', handleProfileUpdated);
         sio.on('progress', handleProgress);
@@ -305,12 +308,27 @@ export const useLessonData = (sessionId, topic, onBack, onReady, sio, onPrefetch
 
         const controller = new AbortController();
         initializeLesson(controller.signal);
-        return () => controller.abort();
-    }, [topic.id || topic.title, userId]);
+
+        // Bug 2: Lesson Lifecycle Tracking
+        if (sio && userId && topic) {
+            const topicId = topic.id || topic.title;
+            sio.emit("lesson_entered", { student_id: userId, topic_id: topicId });
+        }
+
+        return () => {
+            controller.abort();
+            if (sio && userId) {
+                sio.emit("lesson_exited", { student_id: userId });
+            }
+        };
+    }, [topic.id || topic.title, userId, sio]);
 
     const handleAcceptShadow = async () => {
         if (!shadowReady || !interactionId) return;
         try {
+            if (sio && userId) {
+                sio.emit("intervention_resolved", { student_id: userId });
+            }
             await acceptShadowIntervention({
                 student_id: userId,
                 interaction_id: interactionId,
@@ -323,6 +341,13 @@ export const useLessonData = (sessionId, topic, onBack, onReady, sio, onPrefetch
         } catch (err) {
             console.error("Shadow Accept Error:", err);
         }
+    };
+
+    const handleDismissShadow = () => {
+        if (sio && userId) {
+            sio.emit("intervention_resolved", { student_id: userId });
+        }
+        setShadowReady(null);
     };
 
     const handleForceRegenerate = async () => {
@@ -425,10 +450,10 @@ export const useLessonData = (sessionId, topic, onBack, onReady, sio, onPrefetch
 
     return {
         loading, content, isThinking, selectedOption, setSelectedOption, isSubmitted, setIsSubmitted,
-        isChallengeComplete, setIsChallengeComplete, shadowReady, isCompleting, response, setResponse,
+        isChallengeComplete, setIsChallengeComplete, shadowReady, setShadowReady, isCompleting, response, setResponse,
         error, isVisualReady, interactionId, strategyLabel, feedbackSent, score, setScore,
         signalData, currentModality, ragSources, profileToast, progressPhases, elapsedSeconds,
         isDeliveryComplete, isFromCache, sanitizedContent, mermaidData, isContentViewable,
-        isReadyToComplete, handleAcceptShadow, handleForceRegenerate, handleComplete, handleFeedback
+        isReadyToComplete, handleAcceptShadow, handleDismissShadow, handleForceRegenerate, handleComplete, handleFeedback
     };
 };

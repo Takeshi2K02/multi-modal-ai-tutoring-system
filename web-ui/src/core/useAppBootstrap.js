@@ -19,19 +19,20 @@ export const useAppBootstrap = () => {
   // Manage Socket Connection
   useEffect(() => {
     if (token) {
+      // Sync auth token for reconnection attempts
       socket.auth.token = token;
-      if (!socket.connected && !socket.__CONNECTING__) {
-        socket.__CONNECTING__ = true;
+      
+      if (!socket.connected) {
+        if (import.meta.env.DEV) console.log(">>> [Pipeline] Socket initiating connection...");
         socket.connect();
-        if (import.meta.env.DEV) console.log(">>> [Pipeline] Socket connecting with token...");
       }
     } else {
       if (socket.connected) {
         socket.disconnect();
-        if (import.meta.env.DEV) console.log(">>> [Pipeline] Socket disconnected (no token)");
+        if (import.meta.env.DEV) console.log(">>> [Pipeline] Socket forced disconnect (no token)");
       }
     }
-  }, [token]);
+  }, [token, socket]);
 
   // Agent Core Reachability Check
   useEffect(() => {
