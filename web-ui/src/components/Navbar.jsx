@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrainCircuit, Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap, Upload, Activity, Database } from 'lucide-react';
+import { Menu, X, LayoutDashboard, BookOpen, Layers, GraduationCap, Upload } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import { logout } from '../services/api';
 
@@ -10,9 +10,6 @@ const Navbar = ({ onViewChange, currentView }) => {
         { id: 'decomposition', label: 'New Goal', icon: <Layers size={16} strokeWidth={1.5} /> },
         { id: 'upload', label: 'Upload', icon: <Upload size={16} strokeWidth={1.5} /> },
         { id: 'dashboard', label: 'My Learning', icon: <LayoutDashboard size={16} strokeWidth={1.5} /> },
-        { id: 'agent', label: 'Agent Debugger', icon: <BrainCircuit size={16} strokeWidth={1.5} /> },
-        { id: 'monitor', label: 'Live Monitor', icon: <Activity size={16} strokeWidth={1.5} /> },
-        { id: 'data', label: 'Data', icon: <Database size={16} strokeWidth={1.5} /> },
     ];
 
     return (

@@ -27,10 +27,7 @@ const GoalDecomposition = ({ onStart, collectionId }) => {
         setError(null);
         setResult(null);
         try {
-            // Phase 21: RAG Isolation - Pass the explicit collectionId from upload
             const data = await decomposeGoal(goal, collectionId);
-
-            // Inject collectionId into result so subsequent steps (AgentDebugger) can use it
             setResult({ ...data, collectionId: data.collectionId || null });
         } catch (err) {
             console.error(err);

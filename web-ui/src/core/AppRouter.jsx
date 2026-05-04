@@ -5,11 +5,7 @@ import CurriculumBrowser from '../pages/CurriculumBrowser';
 import LessonView from '../pages/LessonView';
 import SessionDashboard from '../pages/SessionDashboard';
 import LectureUpload from '../pages/LectureUpload';
-import AdminMonitor from '../components/AdminMonitor';
-import DataDashboard from '../pages/DataDashboard';
-import AgentDebugger from '../pages/AgentDebugger';
 import LoginPage from '../LoginPage';
-import { useSimulation } from './useSimulation';
 
 export const AppRouter = ({ 
   view, 
@@ -30,8 +26,6 @@ export const AppRouter = ({
   readyTopics,
   setReadyTopics
 }) => {
-  const sim = useSimulation(view, setView, currentTopicContext, setOutcome, outcome);
-
   const renderContent = () => {
     switch (view) {
       case 'decomposition':
@@ -103,25 +97,6 @@ export const AppRouter = ({
           />
         );
 
-      case 'monitor':
-        return <AdminMonitor />;
-
-      case 'data':
-        return <DataDashboard />;
-
-      case 'agent':
-        return (
-          <AgentDebugger
-            context={{
-              profile: sim.demoPersona || { name: "Alex", preferred_modality: { visual: 0.33, textual: 0.33, interactive: 0.34 } },
-              snapshot: latest?.cv || {},
-              synthesis_id: outcome?.meta?.interaction_id
-            }}
-            onComplete={() => {
-              setView('lesson');
-            }}
-          />
-        );
       case 'login':
         return <LoginPage />;
       default:
