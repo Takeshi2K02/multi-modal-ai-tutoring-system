@@ -136,12 +136,25 @@ async def run_simulation(req: ScenarioRequest, user_id: str, is_prefetch: bool =
             print(f"[Prefetch] ⚠️ Error during prefetch lookup: {e}")
             
     # Phase 3 Task 3: Persistent Content Retrieval (Issue 3)
+    _STALE_MARKERS = ["star schema", "FactSales", "Sales Fact", "ETL Layer", "quadratic formula"]
     if not is_prefetch and session_id and req.topic_title:
         try:
             from services.learning_session_service import LearningSessionService
             service = LearningSessionService()
             saved_content = service.get_generated_content(student_id, req.topic_title)
-            
+
+            if saved_content:
+                # Invalidate any cache entry that contains stale hardcoded content
+                cached_text = saved_content.get("content", {}).get("content", "")
+                if any(marker.lower() in cached_text.lower() for marker in _STALE_MARKERS):
+                    print(f"[Cache] Cleared synthesis cache for student={student_id} topic={req.topic_title}")
+                    if service.generated_content is not None:
+                        service.generated_content.delete_one({
+                            "student_id": student_id,
+                            "topic_id": req.topic_title
+                        })
+                    saved_content = None
+
             if saved_content:
                 print(f"[Cache] ♻️ Serving saved synthesis for student={student_id} topic={req.topic_title}")
                 # Construct a mock GraphResponse from saved content
@@ -231,12 +244,10 @@ async def run_simulation(req: ScenarioRequest, user_id: str, is_prefetch: bool =
         )
 
 
-    # Use real topic if provided, else fallback to mock default
-    if req.topic_title:
-        query = f"I want to learn about {req.topic_title}"
-        print(f"Using Real Topic Context: {req.topic_title}")
-    else:
-        query = "Teach me the quadratic formula"
+    if not req.topic_title:
+        raise ValueError("topic_title is required to run synthesis pipeline")
+    query = f"I want to learn about {req.topic_title}"
+    print(f"Using Real Topic Context: {req.topic_title}")
         
     cv_state = "neutral"
     

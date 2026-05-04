@@ -182,9 +182,7 @@ def calculate_engagement_score(engagement_result):
     - Gaze: looking at screen = higher score
     - Posture: upright = higher score
     """
-    score = 0.5  # Base score
-    
-    # Emotion contribution (0.6 weight - high impact)
+    # Emotion component (0–1)
     emotion_scores = {
         'happy': 0.9,
         'focused': 1.0,
@@ -198,9 +196,8 @@ def calculate_engagement_score(engagement_result):
         'tired': 0.3
     }
     emotion_score = emotion_scores.get(engagement_result['emotion'], 0.5)
-    score += (emotion_score - 0.5) * 0.6  # High weight for emotion
-    
-    # Gaze contribution (0.2 weight)
+
+    # Gaze raw contribution; range [-0.15, 0.20] → normalized to [0, 1]
     gaze_scores = {
         'forward': 0.20,    # Looking directly at camera - highly engaged
         'left': -0.10,      # Head turned left - mildly distracted
@@ -210,10 +207,10 @@ def calculate_engagement_score(engagement_result):
         'away': -0.10,      # No face detected - mildly negative
         'unknown': 0.0      # Detection uncertain - neutral (don't penalize)
     }
-    gaze_contribution = gaze_scores.get(engagement_result['gaze'], 0)
-    score += gaze_contribution
-    
-    # Posture contribution (0.2 weight)
+    gaze_raw = gaze_scores.get(engagement_result['gaze'], 0)
+    gaze_score = (gaze_raw + 0.15) / 0.35  # normalize [-0.15, 0.20] → [0, 1]
+
+    # Posture raw contribution; range [-0.20, 0.20] → normalized to [0, 1]
     posture_scores = {
         'upright': 0.2,              # Attentive, facing screen
         'leaning_forward': 0.18,     # Very engaged
@@ -224,11 +221,14 @@ def calculate_engagement_score(engagement_result):
         'head_down': -0.20,          # Very distracted, bored (phone/desk)
         'unknown': 0.0               # Detection uncertain - neutral (don't penalize)
     }
-    posture_contribution = posture_scores.get(engagement_result['posture'], 0)
-    score += posture_contribution
-    
+    posture_raw = posture_scores.get(engagement_result['posture'], 0)
+    posture_score = (posture_raw + 0.20) / 0.40  # normalize [-0.20, 0.20] → [0, 1]
+
+    # Weighted combination: 0.4 × emotion + 0.3 × gaze + 0.3 × posture
+    final_score = (0.4 * emotion_score) + (0.3 * gaze_score) + (0.3 * posture_score)
+
     # Clamp between 0 and 1
-    final_score = max(0.0, min(1.0, score))
+    final_score = max(0.0, min(1.0, final_score))
     
     # Log scoring breakdown for debugging (occasional logging)
     # if np.random.random() < 0.15:  # 15% of frames

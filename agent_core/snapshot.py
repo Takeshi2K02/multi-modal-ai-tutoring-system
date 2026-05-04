@@ -152,7 +152,14 @@ def get_student_snapshot(user_id: str, session_start_time: float = None) -> Stud
         _last_snapshot_logged = {"needed": intervention_needed, "avg": window_avg}
 
     # 6. Map Action ID to Policy Name
-    action_id = latest_rl.get("action_id", 0) if latest_rl else 0
+    if latest_rl:
+        action_id = latest_rl.get("action_id", 0)
+    else:
+        action_id = -1
+        print(f"[Snapshot] WARNING: No RL document found for {user_id}. Using cold-start sentinel action_id=-1")
+    if action_id == -1:
+        print(f"[Snapshot] Mapping sentinel action_id=-1 → 0 for pipeline (no RL data available for {user_id})")
+        action_id = 0
     strategy_name = RL_ACTION_MAP.get(action_id, {}).get("name", "General Instruction")
 
     perf_summary = "Real-time monitoring active."

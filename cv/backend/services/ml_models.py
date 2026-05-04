@@ -205,8 +205,8 @@ class EngagementModel:
         try:
             # Check if emotion model is loaded
             if self.emotion_model is None:
-                print("WARNING: Emotion model not loaded - returning default 'focused'")
-                return {'emotion': 'focused', 'confidence': 0.5}
+                print("WARNING: Emotion model not loaded - returning default 'neutral'")
+                return {'emotion': 'neutral', 'confidence': 0.5}
             
             # Convert frame to PIL Image for Hugging Face pipeline
             from PIL import Image
@@ -241,7 +241,7 @@ class EngagementModel:
                     'label_1': 'frustrated',  # disgust
                     'label_2': 'confused',    # fear
                     'label_3': 'confident',   # happy
-                    'label_4': 'focused',     # neutral
+                    'label_4': 'neutral',     # neutral
                     'label_5': 'bored',       # sad
                     'label_6': 'curious',     # surprise
                     # Actual emotion names (in case model outputs these)
@@ -249,7 +249,7 @@ class EngagementModel:
                     'disgust': 'frustrated',
                     'fear': 'confused',
                     'happy': 'confident',
-                    'neutral': 'focused',
+                    'neutral': 'neutral',
                     'sad': 'bored',
                     'surprise': 'curious',
                     # Direct engagement emotions (if model outputs them)
@@ -269,7 +269,7 @@ class EngagementModel:
                     'fear': 'confused',
                     'surprise': 'curious',
                     'disgust': 'frustrated',
-                    'neutral': 'focused',
+                    'neutral': 'neutral',
                     'confused': 'confused',
                     'focused': 'focused',
                     'bored': 'bored',

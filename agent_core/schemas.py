@@ -44,7 +44,7 @@ class StudentStateSnapshot(BaseModel):
     mastery_level: float = 0.5    # 0.0 - 1.0 (Tie-breaker for ToT)
     session_fatigue: float = 0.0  # 0.0 - 1.0
     confidence: float = 0.5       # From emotion_conf
-    action_id: int = 0            # RL Action (0-8)
+    action_id: int = -1           # RL Action (0-8); -1 = unset/cold-start sentinel
     intervention_needed: bool = False
     feedback_signal: Optional[float] = None # Project ID: 25-26J-130: +1 or -1 from thumbs up/down
 

@@ -147,7 +147,15 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                 TASK: Generate {k} light-weight Strategy Blueprints (Max 100 words each).
                 A blueprint must be concise and include: [Strategy Name], [Methodology], and [Predicted Engagement Score].
                 
-                JSON FORMAT: {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "unique_id", "approach": "Concise blueprint methodology..." }} ] }}
+                ## Diversity Constraints
+                1. Assign each candidate a distinct strategy_type from this set: ["textual", "visual", "interactive"].
+                2. No two candidates may share the same strategy_type.
+                3. Definitions:
+                   - textual: prose explanation, analogy, or simplified text
+                   - visual: Mermaid diagram, UML, flowchart, or annotated code block
+                   - interactive: quiz question, fill-in-the-blank, or reflection prompt
+                
+                JSON FORMAT: {{ "options": [ {{ "label": "Strategy Name", "strategy_type": "textual|visual|interactive", "approach": "Concise blueprint methodology..." }} ] }}
                 """,
                 input_variables=["action_id", "rl_strategy", "pruning_logic", "query", "k"]
             )
@@ -210,7 +218,7 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                                 "strategy_name": opt.get("label", ""),
                                 "internal_thought": opt.get("approach", ""),
                                 "approach": opt.get("approach", ""), 
-                                "strategy_type": opt.get("strategy_type", "visual_explanation"),
+                                "strategy_type": opt.get("strategy_type", "textual"),
                                 "type": "strategy",
                                 "policy_id": action_id,
                                 "policy_name": rl_strategy
@@ -228,7 +236,8 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                             labels = re.findall(r'"label":\s*"([^"]+)"', raw_res)
                             if labels:
                                 print(f"[ToT] 🛡️ >>> Safe-Parse Success: Extracted {len(labels)} strategies manually.")
-                                return [{"content": l, "metadata": {"type": "strategy", "strategy_type": "visual_explanation"}} for l in labels[:CONFIG.branching_factor]]
+                                _ftypes = ["textual", "visual", "interactive"]
+                                return [{"content": l, "metadata": {"type": "strategy", "strategy_type": _ftypes[i % 3]}} for i, l in enumerate(labels[:CONFIG.branching_factor])]
                         except:
                             pass
                             
@@ -236,8 +245,9 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
             
             print("[ToT] ⚠️ All D1 retries failed. Falling back to hardcoded branches.")
             return [
-                {"content": "Standard Explanation", "metadata": {"type": "strategy", "strategy_type": "explanation", "strategy_name": "Standard Explanation", "internal_thought": "Fallback explanation"}},
-                {"content": "Visual Breakdown", "metadata": {"type": "strategy", "strategy_type": "visual_explanation", "strategy_name": "Visual Breakdown", "internal_thought": "Fallback visual"}}
+                {"content": "Standard Explanation", "metadata": {"type": "strategy", "strategy_type": "textual", "strategy_name": "Standard Explanation", "internal_thought": "Fallback explanation"}},
+                {"content": "Visual Breakdown", "metadata": {"type": "strategy", "strategy_type": "visual", "strategy_name": "Visual Breakdown", "internal_thought": "Fallback visual"}},
+                {"content": "Practice Quiz", "metadata": {"type": "strategy", "strategy_type": "interactive", "strategy_name": "Practice Quiz", "internal_thought": "Fallback interactive"}}
             ]
 
         elif target_depth == 2:
@@ -368,11 +378,10 @@ async def _generate_children_content(state: AgentState, parent_node: ThoughtNode
                                         if "[MERMAID_START]" in new_mermaid:
                                             content_val = str(content_val) + "\n\n" + new_mermaid
                                         else:
-                                            # Fallback if retry also fails
-                                            content_val = str(content_val) + "\n\n[MERMAID_START]\ngraph TD\n  A[Data Source] --> B[ETL Layer]\n  B --> C[Data Warehouse]\n  C --> D[Analytics Layer]\n  D --> E[Visualization]\n[MERMAID_END]"
+                                            # Retry produced no valid diagram; let strategy fall back to textual
+                                            pass
                                 except Exception as e:
                                     print(f"[ToT] ⚠️ Mermaid retry failed: {e}")
-                                    content_val = str(content_val) + "\n\n[MERMAID_START]\ngraph TD\n  A[Data Source] --> B[ETL Layer]\n  B --> C[Data Warehouse]\n  C --> D[Analytics Layer]\n  D --> E[Visualization]\n[MERMAID_END]"
 
                         # Ensure directive has the content for the UI
                         directive["content"] = str(content_val)

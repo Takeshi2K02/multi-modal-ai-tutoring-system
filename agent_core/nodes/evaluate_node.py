@@ -137,9 +137,9 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
                 pref = profile_data.get("preferred_modality", {"visual": 0.33, "textual": 0.33, "interactive": 0.34})
                 # Determine modality of each node (heuristic: check metadata or content)
                 def get_node_modality(node):
-                    ctype = node.metadata.get("type", "").lower()
-                    if "worked_example" in ctype or "visual" in ctype: return "visual"
-                    if "practice" in ctype or "interactive" in ctype: return "interactive"
+                    stype = node.metadata.get("strategy_type", "").lower()
+                    if "visual" in stype: return "visual"
+                    if "interactive" in stype: return "interactive"
                     return "textual"
                 
                 mod0 = get_node_modality(top_two[0])
@@ -150,16 +150,16 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
                 weight1 = float(pref.get(mod1, 0))
 
                 if weight1 > weight0:
-                    print(f"[ToT] ✨ >>> Personalization Applied: Swapping node '{mod0}' for student-preferred '{mod1}' (+0.01)")
+                    print(f"[ToT] ✨ >>> Personalization Applied: Swapping node '{mod0}' for student-preferred '{mod1}' (+0.10)")
                     current_best = top_two[1]
                     # Apply a score bonus to ensure it survives pruning
-                    top_two[1].score += 0.01
-                    top_two[1].path_score += 0.01
+                    top_two[1].score += 0.10
+                    top_two[1].path_score += 0.10
                 else:
                     current_best = top_two[0]
                     # Apply a score bonus to ensure it survives pruning
-                    top_two[0].score += 0.01
-                    top_two[0].path_score += 0.01
+                    top_two[0].score += 0.10
+                    top_two[0].path_score += 0.10
             
     # --- PHASE 18: SCORE-SYNCED PATH SELECTION ---
     if scored_frontier:
@@ -181,7 +181,18 @@ async def evaluate_frontier(state: AgentState) -> AgentState:
                 
                 # Retrieve pre-built mermaid for Task 2
                 prebuilt_mermaid = state["context_data"].get("prebuilt_mermaid")
-                mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}" if prebuilt_mermaid else "Include a [MERMAID_START] diagram with [MERMAID_END] tags as per requirements."
+                _stype = best_at_depth.metadata.get("strategy_type", "textual").lower()
+                if prebuilt_mermaid:
+                    mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}"
+                elif "visual" in _stype:
+                    mermaid_instruction = (
+                        "Include a [MERMAID_START]...[MERMAID_END] Mermaid diagram that visually represents "
+                        "the topic being taught. Choose the most appropriate diagram type for the subject "
+                        "(e.g. flowchart, sequence, class, ER, or graph). Do not use a star schema or any "
+                        "generic sales/data-warehouse structure unless the topic itself is about star schemas."
+                    )
+                else:
+                    mermaid_instruction = ""
                 
                 # Strategy Label Mapping
                 action_id = snapshot.get("action_id", 0)
@@ -198,12 +209,11 @@ TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning bluepr
 
 STRICT REQUIREMENTS:
 1. Your total response MUST NOT EXCEED 600 WORDS. Be concise.
-2. Start with THE SUPERMARKET RECEIPT ANALOGY (max 150 words).
+2. Introduce the topic with a relatable real-world analogy (max 150 words).
 3. Expand on the technical methodologies precisely.
-4. Explain 3 key technical terms (Facts, Dimensions, Grain) - max 75 words EACH.
+4. Explain 3 key technical terms relevant to the topic - max 75 words EACH.
 5. {mermaid_instruction}
-6. Mermaid Limit: Core star schema only (Max 1 fact table, 4 dimension tables). Use 'graph TD' syntax.
-7. Maintain an encouraging, professional tone.
+6. Maintain an encouraging, professional tone.
 
 OUTPUT: Pure Markdown text with multimodal tags.
 """,

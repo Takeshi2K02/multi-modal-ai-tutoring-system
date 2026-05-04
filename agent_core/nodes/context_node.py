@@ -174,9 +174,11 @@ async def retrieve_context(state: AgentState) -> AgentState:
     rag_context = "\n---\n".join([r["text"] for r in rag_results])
     rag_sources = [r.get("metadata", {}).get("source", "unknown") for r in rag_results]
 
+    fresh_snapshot = snapshot.dict() if snapshot else None
+    print(f"[Context] snapshot source: {'fresh' if fresh_snapshot else 'stale cache'}")
     context_data = {
         **existing_context,
-        "snapshot": existing_context.get("snapshot") or snapshot.dict(),
+        "snapshot": fresh_snapshot or existing_context.get("snapshot"),
         "history": memory.get_recent_history(student_id),
         "rag_evidence": rag_context,
         "rag_sources": rag_sources,

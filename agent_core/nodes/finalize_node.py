@@ -101,70 +101,57 @@ async def finalize_output(state: AgentState) -> AgentState:
         print(f"[ToT] 🛑 --- BLOCKED: Node {best_node.id if best_node else 'N/A'} is NOT 'Selected'. Returning. ---")
         return state
 
-    def validate_and_fallback_mermaid(text):
-        mermaid_match = re.search(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", text)
-        if not mermaid_match:
-            return text
-        
-        inner = mermaid_match.group(1).strip()
-        # Basic structure checks: must start with graph/erDiagram/flowchart and contain an arrow
-        is_valid = any(inner.startswith(kw) for kw in ["graph", "erDiagram", "flowchart", "sequenceDiagram"])
-        is_valid = is_valid and ("-->" in inner or "---" in inner or "-> " in inner)
-        
-        if is_valid:
-            print(f"[Mermaid] ✅ Valid syntax detected for node {best_node.id if best_node else 'N/A'}")
-            return text
-        else:
-            print(f"[Mermaid] ⚠️ Invalid syntax — using fallback template for node {best_node.id if best_node else 'N/A'}")
-            fallback = (
-                "[MERMAID_START]\n"
-                "graph TD\n"
-                "  Fact[Sales Fact] --> Prod[Product Dim]\n"
-                "  Fact --> Time[Time Dim]\n"
-                "  Fact --> Loc[Location Dim]\n"
-                "  Fact --> Cust[Customer Dim]\n"
-                "[MERMAID_END]"
-            )
-            return re.sub(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", fallback, text)
-
-    def repair_mermaid(text):
-        def clean_mermaid(match):
+    def sanitize_mermaid(text):
+        def clean_match(match):
             inner = match.group(1)
-            # Remove markdown bold/italics often hallucinated by LLMs inside mermaid
-            inner = re.sub(r"\*\*|\_\_", "", inner)
-            
-            # Critical 5: Strict Sanitization
-            lines = inner.split('\n')
-            valid_lines = []
-            for line in lines:
-                l = line.strip()
-                # Match nodeId --> nodeId or nodeId["label"] or graph TD etc.
-                if any(l.startswith(kw) for kw in ["graph", "erDiagram", "flowchart", "sequenceDiagram", "subgraph", "end", "class"]):
-                    valid_lines.append(l)
-                    continue
-                
-                # Replace parentheses in labels with square brackets
-                l = l.replace('(', '[').replace(')', ']')
-                
-                # Check for valid edge patterns
-                if "-->" in l or "---" in l or "-> " in l:
-                    valid_lines.append(l)
-            
-            # Integrity Check: If fewer than 2 valid edges remain, skip Mermaid
-            edge_count = sum(1 for l in valid_lines if any(op in l for op in ["-->", "---", "-> "]))
-            if edge_count < 2:
-                print(f"[Mermaid] ❌ Structural integrity lost ({edge_count} edges). Skipping diagram.")
-                return "[MERMAID_SKIPPED]"
-                
-            return f"[MERMAID_START]\n" + "\n".join(valid_lines) + "\n[MERMAID_END]"
-        
-        text = re.sub(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", clean_mermaid, text)
-        if "[MERMAID_SKIPPED]" in text:
-            return text.replace("[MERMAID_SKIPPED]", "")
-        return text
+            topic_id = state["context_data"].get("topic_id", "unknown")
+
+            # 1. Strip markdown code fences
+            inner = re.sub(r'^```(?:mermaid)?\s*\n?', '', inner.strip(), flags=re.IGNORECASE)
+            inner = re.sub(r'\n?```\s*$', '', inner, flags=re.IGNORECASE)
+
+            # 2. Strip leading ** bold markers
+            inner = re.sub(r'^\*\*+', '', inner.strip()).strip()
+
+            # 3. Strip all leading and trailing whitespace and newlines
+            inner = inner.strip()
+
+            # 4. Fix nested square brackets in node labels: [text [inner]] -> [text (inner)]
+            inner = re.sub(r'\[([^\[\]]*)\[([^\[\]]*)\]([^\[\]]*)\]', r'[\1(\2)\3]', inner)
+
+            # 5. Normalize arrow syntax — replace -- text --> with --> if label has brackets
+            inner = re.sub(r'--\s*.*?[\[\]].*?\s*-->', '-->', inner)
+
+            sanitized = inner
+            first_line = sanitized.split('\n')[0] if sanitized else ''
+            print(f"[Mermaid] Sanitized diagram for topic={topic_id} | first_line={first_line} | length={len(sanitized)}")
+
+            # 6. Validate start keyword
+            valid_keywords = ["graph", "flowchart", "sequenceDiagram", "classDiagram", "erDiagram", "stateDiagram", "gantt", "pie", "gitGraph"]
+            is_valid = any(sanitized.lstrip().startswith(kw) for kw in valid_keywords)
+
+            if is_valid:
+                print(f"[Mermaid] ✅ Valid syntax detected for node {best_node.id if best_node else 'N/A'}")
+                return f"[MERMAID_START]\n{sanitized}\n[MERMAID_END]"
+            else:
+                print(f"[Mermaid] Invalid syntax for topic={topic_id} — falling back to textual")
+                if best_node:
+                    best_node.metadata["strategy_type"] = "textual"
+                return ""
+
+        return re.sub(r"\[MERMAID_START\]([\s\S]*?)\[MERMAID_END\]", clean_match, text)
+
 
     start_time = state.get("build_time", time.time())
     precomputed_payload = best_node.metadata.get("synthesis_payload") if best_node else None
+    strategy_type = best_node.metadata.get("strategy_type", "textual").lower() if best_node else "textual"
+
+    def compute_modality(text, stype):
+        if "visual" in stype:
+            return "VISUAL"
+        if "interactive" in stype:
+            return "INTERACTIVE"
+        return "TEXTUAL"
 
     if precomputed_payload:
         print(f"[Finalizer] ✅ Using pre-computed synthesis payload for node {best_node.id} — skipping ALL LLM logic.")
@@ -207,23 +194,29 @@ async def finalize_output(state: AgentState) -> AgentState:
         
         # Task 2: Pre-built Mermaid Integration
         prebuilt_mermaid = state["context_data"].get("prebuilt_mermaid")
-        mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}" if prebuilt_mermaid else "Include a [MERMAID_START] diagram with [MERMAID_END] tags as per requirements."
+        if prebuilt_mermaid:
+            mermaid_instruction = f"Inject this EXACT Mermaid diagram: {prebuilt_mermaid}"
+        elif "visual" in strategy_type:
+            mermaid_instruction = "You MUST include a [MERMAID_START] ... [MERMAID_END] block with a 'graph TD' diagram of at least 5 nodes. This is a VISUAL delivery — the diagram is mandatory."
+        else:
+            mermaid_instruction = ""
 
         synthesis_prompt = ChatPromptTemplate.from_template("""
             Role: Senior Pedagogical Architect.
             Context: {query}
             Selected Strategy Path (Blueprints): {thought}
             Strategy Label: {strategy}
-            
+            Delivery Modality: {strategy_type} — you MUST produce output consistent with this modality.
+
             TASK: Perform Just-In-Time (JIT) Synthesis. Expand the selected reasoning blueprints into a comprehensive multimodal lesson.
-            
+
             REQUIREMENTS:
-            1. Start with THE SUPERMARKET RECEIPT ANALOGY. 
+            1. Start with THE SUPERMARKET RECEIPT ANALOGY.
             2. Expand on the technical methodologies concisely.
             3. Explain 3 terms: Facts, Dimensions, Grain.
             4. {mermaid_instruction}
             5. Mermaid Diagram Type: Use 'graph TD' (Top-Down) for all architectural schemas.
-            
+
             OUTPUT: Pure Markdown.
         """)
         
@@ -237,6 +230,7 @@ async def finalize_output(state: AgentState) -> AgentState:
                 "query": state["user_query"],
                 "thought": blueprint_trace,
                 "strategy": strategy_label,
+                "strategy_type": strategy_type,
                 "mermaid_instruction": mermaid_instruction
             }, timeout=25.0)
 
@@ -253,8 +247,12 @@ async def finalize_output(state: AgentState) -> AgentState:
             estimated_reading_time = 30
 
     # Apply global repair and validation
-    full_lesson = repair_mermaid(full_lesson)
-    full_lesson = validate_and_fallback_mermaid(full_lesson)
+    full_lesson = sanitize_mermaid(full_lesson)
+
+    # B2: Strip Mermaid blocks from non-visual content so compute_modality is not overridden
+    if "visual" not in strategy_type and "[MERMAID_START]" in full_lesson:
+        print(f"[Finalizer] 🧹 Stripping Mermaid block — strategy_type='{strategy_type}' is not visual.")
+        full_lesson = re.sub(r"\[MERMAID_START\][\s\S]*?\[MERMAID_END\]", "", full_lesson).strip()
 
     # Outcome assignment for JIT path
     if not precomputed_payload:
@@ -310,7 +308,7 @@ async def finalize_output(state: AgentState) -> AgentState:
                 "final_content": full_lesson,
                 "strategy": strategy_label,
                 "rag_sources": state["context_data"].get("rag_sources", []),
-                "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+                "current_modality": compute_modality(full_lesson, strategy_type),
                 "timestamp": datetime.now().isoformat()
             }
             r.setex(prefetch_key, 1800, json.dumps(payload))
@@ -328,7 +326,7 @@ async def finalize_output(state: AgentState) -> AgentState:
                 "final_content": full_lesson,
                 "full_text": full_lesson,
                 "strategy": strategy_label,
-                "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+                "current_modality": compute_modality(full_lesson, strategy_type),
                 "rag_sources": state["context_data"].get("rag_sources", []),
                 "interaction_id": interaction_id,
                 "created_at": datetime.utcnow(),
@@ -370,7 +368,7 @@ async def finalize_output(state: AgentState) -> AgentState:
         "strategy_label": strategy_label,
         "high_confidence": is_high_confidence,
         "rag_sources": state["context_data"].get("rag_sources", []),
-        "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL"
+        "current_modality": compute_modality(full_lesson, strategy_type)
     })
 
     updated_handoff = []
@@ -381,7 +379,7 @@ async def finalize_output(state: AgentState) -> AgentState:
         "final_content": full_lesson,
         "strategy": strategy_label,
         "rag_sources": state["context_data"].get("rag_sources", []),
-        "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+        "current_modality": compute_modality(full_lesson, strategy_type),
         "timestamp": datetime.now().isoformat()
     })
 
@@ -397,7 +395,7 @@ async def finalize_output(state: AgentState) -> AgentState:
         "reasoning_trace": trace,
         "interaction_outcome": outcome,
         "selected_strategy_label": strategy_label,
-        "current_modality": "VISUAL" if "[MERMAID_START]" in full_lesson else "TEXTUAL",
+        "current_modality": compute_modality(full_lesson, strategy_type),
         "interaction_id": interaction_id,
         "build_time": latency,
         "estimated_reading_time": estimated_reading_time,
